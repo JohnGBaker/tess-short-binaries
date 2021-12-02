@@ -6,7 +6,7 @@
 # at github/sidruns30/HB_MCMC and the MCMC code at
 # github/johngbaker/ptmcmc
 #
-from astropy.stats import LombScargle
+from astropy.timeseries import LombScargle
 import pandas as pd
 import numpy as np
 
@@ -93,36 +93,21 @@ def fold_lc(times,fluxes,errs,Pfold,downfac=1.0,rep=False):
     #print('mean err=',ferrs.mean())
     return fphases,ffluxes,ferrs
 
-def weighted_likelihood(ftimes,ffluxes,ferrs,x,sp,constraint_weight=10000):
+def weighted_likelihood(ftimes,ffluxes,ferrs,x,sp,constraint_weight=10000,lctype=3):
     pars=sp.get_pars(x);
     if sp.out_of_bounds(pars): #Hopefully doesn't happen?
-        lmeans=np.mean(sp.live_ranges(),axis=1)
-        parwt=np.sum((pars-sp.get_pars(lmeans))**2)
+        lr=sp.live_ranges()
+        lmeans=np.mean(lr,axis=1)
+        lwidths=lr[:,1]-lr[:,0]
+        print('A par is our of range: dpar/hwidth:\n',(x-lmeans)/lwidths*2)
+        parwt=np.sum((pars-sp.get_pars(lmeans))**2)        
         #print(lmeans,parwt)
-        return 2e18*(1+parwt*0)
+        return -2e18*(1+parwt*0)
     else:
-        mlike=pyHB.likelihood(ftimes,ffluxes,ferrs,pars)
+        mlike=pyHB.likelihood(ftimes,ffluxes,ferrs,pars,lctype=lctype)
         if constraint_weight > 0:
             roche_frac=pyHB.test_roche_lobe(pars)
-            mlike-=constraint_weight*max([0,roche_frac-0.8])
-        #print(x,mlike)
-        #print(roche_frac,pars)
-        return mlike
-
-def weighted_likelihood_lferr0(ftimes,ffluxes,lferr0,x,sp,constraint_weight=10000):
-    
-    pars=sp.get_pars(x);
-    if sp.out_of_bounds(pars): #Hopefully doesn't happen?
-        print('pars out of bounds:',pars)
-        lmeans=np.mean(sp.live_ranges(),axis=1)
-        parwt=np.sum((pars-sp.get_pars(lmeans))**2)
-        #print(lmeans,parwt)
-        return 2e18*(1+parwt*0)
-    else:
-        mlike=pyHB.likelihood_log10ferr0(ftimes,ffluxes,lferr0,pars)
-        if constraint_weight > 0:
-            roche_frac=pyHB.test_roche_lobe(pars)
-            mlike-=constraint_weight*max([0,roche_frac-0.8])
+            mlike-=constraint_weight*max([0,roche_frac-1.0])
         #print(x,mlike)
         #print(roche_frac,pars)
         return mlike
@@ -144,9 +129,11 @@ def adjust_sectors(data):
 
 class HB_likelihood(ptmcmc.likelihood):
     
-    def __init__(self,id,data,period=None,lferr0=None,Mstar=None,massTol=0,lensMax=0,eMax=None,maxperiod=14,fixperiod=None,downfac=1.0,constraint_weight=10000,outname="",rep=False,forceM1gtM2=False,rescalefac=1.0,allow_blend=False):
+    def __init__(self,id,data,period=None,lferr0=None,Mstar=None,massTol=0,lensMax=0,eMax=None,maxperiod=14,fixperiod=None,downfac=1.0,constraint_weight=10000,outname="",rep=False,forceM1gtM2=False,rescalefac=1.0,allow_blend=False,viz=False,lctype=3,pins={}):
         self.bestL=None
         self.forceM1gtM2=forceM1gtM2
+        self.lctype=lctype
+        
         ## Prepare data ##
         if True:
             data=adjust_sectors(data)
@@ -158,24 +145,43 @@ class HB_likelihood(ptmcmc.likelihood):
         dofold=True
         if dofold:    
             ## Compute period and fold data ##
-            if period is not None: fperiod=period
+            if period is not None and period>0: fperiod=period
             else:
                 print("Computing folding period")
-                frequency, power = LombScargle(data['time'].values,data['flux'].values).autopower()
-                ilfcut=int(len(power)/40)+1
+                #For TESS data we set some reasonable limits on the Period
+                minimum_period=0.25
+                maximum_period=14
+                #Because our lightcurves are not nearly sinusoidal, it is
+                #essential to use more terms in the Fourier model underlying
+                #the Lomb-Scargle analysis. Otherwise a harmonic is likely to
+                #dominate. We also find the standard 5 samples per peak to be
+                #insufficient.
+                frequency, power = LombScargle(data['time'].values,data['flux'].values,nterms=5).autopower(minimum_frequency=1/maximum_period,maximum_frequency=1/minimum_period,samples_per_peak=50)
+                #print('LombScargle samples:',len(power))
+                #ilfcut=int(len(power)/20)+1
+                ilfcut=int(len(power))
                 if0=0
                 for i,f in enumerate(frequency):
                     if 1/f < maxperiod:
                         if0=i
                         break
-                fmax=frequency[if0:ilfcut][np.argmax(power[if0:ilfcut])]
-                fperiod=1.0/fmax
+                imax=if0+np.argmax(power[if0:ilfcut])
+                pm,p0,pp=power[imax-1:imax+2]
+                eps=(pm-pp)/(pm+pp-2*p0)/2
+                f0=frequency[imax]
+                df=frequency[imax+1]-f0
+                fmax=f0+df*eps
                 if rep:
+                    print('Lomb-Scargle raw f,P=',f0,1/f0)
+                    print('             fit f,P=',fmax,1/fmax)
+                fperiod=1.0/fmax
+                if rep and viz:
                     import matplotlib.pyplot as plt
+                    #print('Lomb-Scargle period',fperiod)
                     plt.plot(frequency,power)
                     plt.plot(frequency[if0:ilfcut],power[if0:ilfcut])
                     plt.show()
-                sys.exit
+                #sys.exit
                     
             doubler=1#set to 2 to fold on  double period
             if(fixperiod is not None):
@@ -209,14 +215,24 @@ class HB_likelihood(ptmcmc.likelihood):
             print('ffluxes',self.ffluxes)
 
         ## Set up parameter space
-        ## This piggybacks on the parameter space tool from  pyHB
-        
-        sp=copy.deepcopy(pyHB.sp)
+        ## This piggybacks on the parameter space tool from  pyHB        
+        if lctype==2:
+            sp=copy.deepcopy(pyHB.sp2)
+        elif lctype==3:
+            sp=copy.deepcopy(pyHB.sp3)
+
+        #Set pinned params
+        for name in pins:
+            if name in sp.live_names():
+                sp.pin(name,pins[name])
+            
         #Allow periods within a factor of just over 2% of specified
         sp.reset_range('logP',[np.log10(self.fperiod/1.02),np.log10(self.fperiod*1.02)])
         sp.pin('logP',np.log10(self.fperiod))
+        if 'logTanom' in sp.live_names(): sp.pin('logTanom',0)
+
         #sp.reset_range('log(F+50)',[logFmean-dlogF,logFmean+dlogF])
-        if not allow_blend: sp.pin('log_blendFlux',-3)
+        if not allow_blend: sp.pin('blend_frac',-3)
             
         if(Mstar is not None):
             if massTol==0:
@@ -230,6 +246,9 @@ class HB_likelihood(ptmcmc.likelihood):
 
         #T0 is not meaningful beyond modP
         sp.reset_range('T0',[self.ftimes[0],self.ftimes[0]+self.fperiod])
+
+        #Expand the mass range for test
+        sp.reset_range('logM1',[-1.5,2.5])
         
         ###Compute SNR
         #pars0=[-10,1,10000,0,0,0,0,logFmean,0]
@@ -255,8 +274,6 @@ class HB_likelihood(ptmcmc.likelihood):
         wraps=['Omega','Omega0','T0']#T0 not meaningfor beyond T0%period
         centers=[0]*npar
         scales=[1]*npar
-        types=['uni']*npar
-        types[names.index('inc')]='pol'
         for i  in range(npar):
             name=names[i]
             xmin=ranges[i,0]
@@ -268,8 +285,17 @@ class HB_likelihood(ptmcmc.likelihood):
             #set prior info
             centers[i]=(xmax+xmin)/2.0
             scales[i]=(xmax-xmin)/2.0
+        types=['uni']*npar
+        types[names.index('inc')]='polar'
+        #These shhould be gaussian, if present
+        for pname in ['logTanom', 'mu_1', 'tau_1', 'mu_2', 'tau_2', 'alpha_ref_1', 'alpha_ref_2', 'flux_tune', 'ln_noise_resc']:
+            if pname in names:
+                types[names.index(pname)]='gaussian'
+                sp.reset_range(pname,[float('-inf'),float('inf')])
+        #If ln_noise_scale fitting is included, we reduce the prior width if we have already downsampled the data
+        if 'ln_noise_resc' in names:
+            scales[names.index(pname)] /= len(data['time'].values)/len(self.ftimes)
         
-
         #some rescaling for better Gaussian proposals
         rescales=[rescalefac]*npar
         
@@ -289,9 +315,9 @@ class HB_likelihood(ptmcmc.likelihood):
         if not done:
             #print(params)
             if self.lferr0 is None:
-                result=weighted_likelihood(self.ftimes,self.ffluxes,self.ferrs,params,self.sp,self.constraint_weight)
-            else:
-                result=weighted_likelihood_lferr0(self.ftimes,self.ffluxes,self.lferr0,params,self.sp,self.constraint_weight)
+                result=weighted_likelihood(self.ftimes,self.ffluxes,self.ferrs,params,self.sp,self.constraint_weight,self.lctype)
+            #else:
+                #result=weighted_likelihood_lferr0(self.ftimes,self.ffluxes,self.lferr0,params,self.sp,self.constraint_weight)
         if False:
             global count
             print(count)
@@ -311,7 +337,10 @@ class HB_likelihood(ptmcmc.likelihood):
         print('  fit percent = %5.2f'%((1-bestL/llike0)*100.0))
 
     def getModels(self,parslist):
-        models=[pyHB.lightcurve(self.ftimes,self.sp.get_pars(pars)) for pars in parslist]
+        if self.lctype==2:
+            models=[pyHB.lightcurve2(self.ftimes,self.sp.get_pars(pars)) for pars in parslist]
+        elif self.lctype==3:
+            models=[pyHB.lightcurve3(self.ftimes,self.sp.get_pars(pars)) for pars in parslist]
         return models
         
 count=0
@@ -422,6 +451,8 @@ def main(argv):
     opt.add("tlimits","Set tmin,tmax time limits, outside which to ignore data. (def=none)","")    #int Nlead_args=1;
     opt.add('rescalefac','Rescale factor for gaussian proposals. Default=1','1')
     opt.add('blend','Set to 1 to vary the blending flux','0')
+    opt.add('lctype','Light curve model version. Options are 2 or 3. (Default 3)','3')
+    opt.add('pins','json formatted string with parname:pinvalue pairs','{}')
     #//Create the sampler
     #ptmcmc_sampler mcmc;
     s0=ptmcmc.sampler(opt)
@@ -495,7 +526,8 @@ def main(argv):
         dfg[['time','flux','err']].to_csv(outname+'_trimmed.dat')
 
     #//Create the likelihood
-    
+    import json
+    pindict=json.loads(opt.value('pins'))
     fixperiod=None
     if opt.value('period')=="None":
         period=None
@@ -512,10 +544,14 @@ def main(argv):
     #lferr0=float(opt.value('l10ferr'))
     lferr0=None
     blend=int(opt.value('blend'))==1
-    
-    like=HB_likelihood(id,dfg,period,lferr0,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalefac=rescalefac,allow_blend=blend)
+    lctype=int(opt.value('lctype'))
 
-    if(opt.value('plotSamples')!="" or int(opt.value('nPlot'))==0):
+    do_plot = opt.value('plotSamples')!="" or int(opt.value('nPlot'))==0
+    
+    
+    like=HB_likelihood(id,dfg,period,lferr0,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalefac=rescalefac,allow_blend=blend,viz=do_plot,lctype=lctype,pins=pindict)
+
+    if(do_plot):
         #Plot samples instead of running chains
         ncurves=int(opt.value('nPlot'))
         t=like.ftimes
@@ -538,9 +574,17 @@ def main(argv):
                 samples=chain.get_samples(ncurves,n)
                 print("samples:")
                 for sample in samples:print(sample)
-                models=[pyHB.lightcurve(ts,like.sp.get_pars(pars)) for pars in samples]
+                cnames=chain.names[chain.names.index('post')+1:]
+                idx=[cnames.index(name) for name in like.sp.live_names()]
+                print(idx,cnames,like.sp.live_names())
+                psamples=[like.sp.get_pars([pars[idx[i]] for i in range(len(idx))]) for pars in samples]
+                if lctype==2:
+                    lightcurve=pyHB.lightcurve2
+                elif lctype==3:
+                    lightcurve=pyHB.lightcurve3
+                models=[lightcurve(ts,p[:-1]) for p in psamples]
                 modelsets.append(models)
-                roches=[pyHB.test_roche_lobe(like.sp.get_pars(pars),verbose=True) for pars in samples]
+                roches=[pyHB.test_roche_lobe(p,verbose=True) for p in psamples]
                 print('roche fracs:',roches)
         else: modelsets =[]
         import matplotlib.pyplot as plt
@@ -552,8 +596,8 @@ def main(argv):
             for model in modelsets[i]:
                 plt.plot(ts,model,col,alpha=0.2,label=label)
                 label=None
-            rawftimes=like.data['time']%(like.fperiod)+int(like.data['time'][0]/like.fperiod)*like.fperiod
-            #-0*like.data['time'][0]%(like.fperiod)+like.ftimes[0]
+        rawftimes=like.data['time']%(like.fperiod)+int(like.data['time'][0]/like.fperiod)*like.fperiod
+        #-0*like.data['time'][0]%(like.fperiod)+like.ftimes[0]
         
         plt.plot(rawftimes,like.data['flux'],'k.',ls='None',markersize=0.5,label='raw data')
         plt.legend()
