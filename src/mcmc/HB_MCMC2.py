@@ -9,6 +9,7 @@
 from astropy.timeseries import LombScargle
 import pandas as pd
 import numpy as np
+import json
 
 #import matplotlib as mpl
 #import matplotlib.pyplot as plt
@@ -424,6 +425,8 @@ def read_data_from_file(id,path,edgeskip=0.5,trueerr=1.0,tmin=None,tmax=None):
 #//***************************************************************************************8
 #//main test program
 def main(argv):
+
+    print('in')
     ptmcmc.Init()
 
     #//prep command-line options
@@ -431,45 +434,91 @@ def main(argv):
     opt=ptmcmc.Options()
     
     #//Add some command more line options
-    ##opt.add("nchains","Number of consequtive chain runs. Default 1","1")
-    opt.add("id","TIC_ID","")
-    opt.add("noTIC","Set to 1 to skip any online query about TIC id.","0")
-    opt.add("datadir","directory where processed sector data files are located",".")
-    opt.add("datafile","Explicitly indicate the data file.","")
+
+    #data specific flags
     opt.add("seed","Pseudo random number grenerator seed in [0,1). (Default=-1, use clock to seed.)","-1")
     ##opt.add("precision","Set output precision digits. (Default 13).","13")
     opt.add("outname","Base name for output files (Default 'mcmc_output').","mcmc_output")
+    
+    #data_model flags
+    opt.add("data_style","Provide data model flags as a json string","")
+    opt.add("id","TIC_ID","")
     opt.add("period","Set fixed period for folding and model. (Default None)","None")
+    opt.add("datafile","Explicitly indicate the data file.","")
+    opt.add("Mstar","Override TIC (primary) star mass. (Default None)","None")
+    opt.add("sectors","Only use these sectors (comma-separated)","")
+    opt.add("tlimits","Set tmin,tmax time limits, outside which to ignore data. (def=none)","")    
+    opt.add("noTIC","Set to 1 to skip any online query about TIC id.","0")
+
+    #hb model style flags
+    opt.add("hb_style","Provide heartbeat model style flags as a json string","")
+    opt.add("datadir","directory where processed sector data files are located",".")
     opt.add("eMax","Set max value for eccentricity. (Default 0.95)","0.95")
-    opt.add("Mstar","Override TIC star mass. (Default None)","None")
     opt.add("massTol","Uniform confidence width factor for TIC mass. (Default 0.2)","0.2")
     opt.add("plotSamples","File with samples to plot, (eg chain output)","")
     opt.add("nPlot","If plotting samples, how many to sample curves to include","20")
     opt.add("downfac","Extra downsampling factor in lightcurve folding.","1")
     opt.add("Roche_wt","Weight factor for Roche-limit constraint (def 10000).","10000")
-    opt.add("secs","Only use these sectors (comma-separated)","")
     opt.add("trueerr","scalefactor of the error following JS's code. (def=1)","1")
     opt.add("M1gtM2","Set to 1 to force M1>M2. (def=0)","0")
-    opt.add("tlimits","Set tmin,tmax time limits, outside which to ignore data. (def=none)","")    #int Nlead_args=1;
     opt.add('rescalefac','Rescale factor for gaussian proposals. Default=1','1')
     opt.add('blend','Set to 1 to vary the blending flux','0')
     opt.add('lctype','Light curve model version. Options are 2 or 3. (Default 3)','3')
     opt.add('pins','json formatted string with parname:pinvalue pairs','{}')
+
+    print('added options')
     #//Create the sampler
     #ptmcmc_sampler mcmc;
     s0=ptmcmc.sampler(opt)
     rep=s0.reporting()
     opt.parse(argv)
     
-    #Get TIC catalog info:
-    id=int(opt.value('id'))
-    datadir=opt.value('datadir')
+    #Process flags:
+    getpar=lambda name,typ:style.get(name,typ(opt.value(name)))
+    getboolpar=lambda name:style.get(name,(opt.value(name)!='0'))
+    getNpar=lambda name,typ:style.get(name,typ(opt.value(name)) if opt.value(name)!='None' else None)
+
+    #basic
     outname=opt.value('outname')
-    massTol=float(opt.value('massTol'))
-    Roche_wt=float(opt.value('Roche_wt'))
+    seed=float(opt.value('seed'))
+
+    #viz only option
+    do_plot = opt.value('plotSamples')!="" or int(opt.value('nPlot'))==0    
+    ncurves=int(opt.value('nPlot'))
+    sampfiles=opt.value('plotSamples')
+
+    #data
+    style={}
+    if opt.value('data_style')!='': 
+        style=json.loads(opt.value('data_style'))
+    id=getpar('id',int)
+    datadir=getpar('datadir',str)
+    massTol=getpar('massTol',float)
+    noTIC=getboolpar('noTIC')
+    Mstar=getNpar('Mstar',float)
+    sectors=getpar('sectors',str)
+    tlimits=getpar('tlimits',str)
+    trueerr=getpar('trueerr',float)
+    datafile=getpar('datafile',str)
+    period=getNpar('period',float)
+    print('got data pars: period',period)
+
+    # HB model style
+    style={}
+    if opt.value('hb_style')!='': 
+        style=json.loads(opt.value('hb_style'))
+    Roche_wt=getpar('Roche_wt',float)
+    pindict=getpar('pins',json.loads)
+    eMax=getpar('eMax',float)
+    downfac=getpar('downfac',float)
+    forceM1gtM2=getboolpar('M1gtM2')
+    rescalefac=getpar('rescalefac',float)
+    lferr0=None
+    blend=getboolpar('blend')
+    lctype=getpar('lctype',int)
     
-    
-    if opt.value('noTIC')!='0':
+    #Get TIC catalog info:    
+    if noTIC:
         TICData = None
     else:
         try:
@@ -494,73 +543,52 @@ def main(argv):
             if rep:print('Cannot "useM" since I have no TIC data! Overriding')
         if massTol==0 and str(TICData['rad'][0]).isnumeric:  #Don't fix radius if we are varying the mass
             Rstar=TICData['rad'][0]
-            if rep:print('Rstar=',Rstar)
-        Mstar=None
-        if not np.isnan(float(TICData['mass'][0])):
+            if rep:print('Rstar=',Rstar)        
+        if Mstar is None and not np.isnan(float(TICData['mass'][0])):
             Mstar=TICData['mass'][0]
             #print('float(Mstar)',float(Mstar))
             if rep:print('Mstar(TIC)=',Mstar)
-        if opt.value('Mstar')!='None':Mstar=float(opt.value('Mstar'))
         if rep:print('Mstar=',Mstar)
 
     allowsecs=None
-    if opt.value('secs')!="":
-        allowsecs=opt.value('secs').split(',')
+    if sectors!="":
+        allowsecs=sectors.split(',')
         allowsecs=[int(sec) for sec in allowsecs]
     tmin=None
     tmax=None
-    if opt.value('tlimits')!="":
-        tlims=opt.value('tlimits').split(',')
+    if tlimits!="":
+        tlims=tlimits.split(',')
         if len(tlims)<2:tlims.append('')
         if tlims[0].isnumeric():tmin=float(tlims[0])
         if tlims[1].isnumeric():tmax=float(tlims[1])
         print('Constraining',tmin,'< t <',tmax)
         
     #Prepare the data:
-    trueerr=float(opt.value('trueerr'))
-    if opt.value('datafile')=="":
+
+    if datafile=='':
         dfg=read_data_from_sector_files(id,datadir,edgeskip=0.5,allowsecs=allowsecs,trueerr=trueerr,tmin=tmin,tmax=tmax)
     else:
-        filepath=datadir+'/'+opt.value('datafile')
+        filepath=datadir+'/'+datafile
         dfg=read_data_from_file(id,filepath,trueerr=trueerr,tmin=tmin,tmax=tmax)
     if rep:
         print('Trimmed data length is',len(dfg))
         dfg[['time','flux','err']].to_csv(outname+'_trimmed.dat')
 
     #//Create the likelihood
-    import json
-    pindict=json.loads(opt.value('pins'))
     fixperiod=None
-    if opt.value('period')=="None":
-        period=None
-    else:
-        period=float(opt.value('period'))
-        if period<0:
-            period=-period
-            fixperiod=period
-    eMax=float(opt.value('eMax'))
-    #dlogF=float(opt.value('dlogF'))
-    downfac=float(opt.value('downfac'))
-    forceM1gtM2=(int(opt.value('M1gtM2'))==1)
-    rescalefac=float(opt.value('rescalefac'))
-    #lferr0=float(opt.value('l10ferr'))
-    lferr0=None
-    blend=int(opt.value('blend'))==1
-    lctype=int(opt.value('lctype'))
+    if period is not None and period<0:
+        period=-period
+        fixperiod=period
 
-    do_plot = opt.value('plotSamples')!="" or int(opt.value('nPlot'))==0
-    
     
     like=HB_likelihood(id,dfg,period,lferr0,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalefac=rescalefac,allow_blend=blend,viz=do_plot,lctype=lctype,pins=pindict)
 
     if(do_plot):
         #Plot samples instead of running chains
-        ncurves=int(opt.value('nPlot'))
         t=like.ftimes
         ts=np.linspace(t[0],t[-1],300)
         data=like.ffluxes
         if ncurves>0:
-            sampfiles=opt.value('plotSamples')
             if sampfiles.startswith('[') and sampfiles.endswith(']'):
                 if ',' in sampfiles:
                     sampfiles=sampfiles[1:-1].split(',')
@@ -606,73 +634,24 @@ def main(argv):
         plt.show()
         return
         
-        
-    seed=float(opt.value('seed'))
     if seed<0:seed=np.random.random();
-    #istringstream(opt.value("precision"))>>output_precision;
-    #istringstream(opt.value("outname"))>>outname;
     
     #//report
-    #cout.precision(output_precision);
     if rep:print("\noutname = '"+outname+"'")
-    #cout<<"seed="<<seed<<endl; 
-    #cout<<"Running on "<<omp_get_max_threads()<<" thread"<<(omp_get_max_threads()>1?"s":"")<<"."<<endl;
     
     #//Should probably move this to ptmcmc/bayesian
     ptmcmc.resetRNGseed(seed);
-    
-    #globalRNG.reset(ProbabilityDist::getPRNG());//just for safety to keep us from deleting main RNG in debugging.
-          
-    #//Get the space/prior for use here
-    #stateSpace space;
-    #shared_ptr<const sampleable_probability_function> prior;  
     space=like.getObjectStateSpace();
     if rep:print("like.nativeSpace=\n"+space.show())
-    #prior=like->getObjectPrior();
-    #cout<<"Prior is:\n"<<prior->show()<<endl;
-    #valarray<double> scales;prior->getScales(scales);
-    
-    #//Read Params
     Npar=space.size();
     if rep:print("Npar=",Npar)
-    
-    #//Bayesian sampling [assuming mcmc]:
-    #//Set the proposal distribution 
-    #int Ninit;
-    #proposal_distribution *prop=ptmcmc_sampler::new_proposal_distribution(Npar,Ninit,opt,prior.get(),&scales);
-    #cout<<"Proposal distribution is:\n"<<prop->show()<<endl;
-    #//set up the mcmc sampler (assuming mcmc)
-    #//mcmc.setup(Ninit,*like,*prior,*prop,output_precision);
-    #mcmc.setup(*like,*prior,output_precision);
-    #mcmc.select_proposal();
     s0.setup(like)
 
-    #//Testing (will break testsuite)
-    #s=like.draw_from_prior();
-    #print("test state:",s.get_string())
-    #print("logL=",like.evaluate_log(s))
-  
-    
-    #//Prepare for chain output
-    #ss<<outname;
-    #string base=ss.str();
-    
-    #//Loop over Nchains
-    #for(int ic=0;ic<Nchain;ic++){
+
     s=s0.clone();
     s.initialize();
     print('initialization done')
     s.run(outname,0);
-    #  //s->analyze(base,ic,Nsigma,Nbest,*like);
-    #del s;
-    #}
-    
-    #//Dump summary info
-    #cout<<"best_post "<<like->bestPost()<<", state="<<like->bestState().get_string()<<endl;
-    #//delete data;
-    #//delete signal;
-    #delete like;
-    #}
 
 if __name__ == "__main__":
     import sys
