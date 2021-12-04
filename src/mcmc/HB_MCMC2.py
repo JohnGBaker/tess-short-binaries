@@ -22,7 +22,9 @@ import sys
 #if dirp not in sys.path: sys.path.append(dirp)
 #dirp='../../../TessSLB/src/LightCurveCode/ptmcmc/cython'
 #if dirp not in sys.path: sys.path.append(dirp)
-dirp='../../MCMC/ptmcmc/python'
+dirp='../ptmcmc/python'
+if dirp not in sys.path: sys.path.append(dirp)
+dirp='ptmcmc/python'
 if dirp not in sys.path: sys.path.append(dirp)
 import ptmcmc
 import ptmcmc_analysis
