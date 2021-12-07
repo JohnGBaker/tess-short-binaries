@@ -1,0 +1,20 @@
+{
+    "hb2":{
+	"lctype":2, 
+	"eMax":0.99, 
+	"M1gtM2":true, 
+	"Roche_wt":0.0
+    },
+    "hb3":{
+	"lctype":3, 
+	"eMax":0.99, 
+	"M1gtM2":true, 
+	"Roche_wt":0.0
+    },
+    "hb3R":{
+	"lctype":3, 
+	"eMax":0.99, 
+	"M1gtM2":true, 
+	"Roche_wt":1000.0 
+    } 
+}

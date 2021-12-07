@@ -1,0 +1,9 @@
+{
+    "std":{
+	"id":"_TIC_IC_", 
+	"datafile": "_DATAFILEPATH_", 
+	"period":null, 
+	"downfac":0.2, 
+	"trueerr":0.003
+    }
+} 

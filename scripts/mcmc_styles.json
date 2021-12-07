@@ -1,0 +1,32 @@
+{
+    "pt40":{
+	"save_every":40, 
+	"nskip":40, 
+	"nsteps":50000000, 
+	"prop_adapt_rate":0.001, 
+	"prop_adapt_more":true, 
+	"gauss_temp_scaled":true, 
+	"de_unlikely_alpha":0.01, 
+	"gauss_step_fac":4.0, 
+	"pt":40, 
+	"pt_evolve_rate":0.01, 
+	"chain_ess_limit":0, 
+	"chain_ess_stop":2000, 
+	"rescalefac":10
+    },
+    "pt50":{
+	"save_every":40, 
+	"nskip":40, 
+	"nsteps":50000000, 
+	"prop_adapt_rate":0.001, 
+	"prop_adapt_more":true, 
+	"gauss_temp_scaled":true, 
+	"de_unlikely_alpha":0.01, 
+	"gauss_step_fac":4.0, 
+	"pt":50, 
+	"pt_evolve_rate":0.01, 
+	"chain_ess_limit":0, 
+	"chain_ess_stop":2000, 
+	"rescalefac":10
+    }
+}

@@ -426,7 +426,6 @@ def read_data_from_file(id,path,edgeskip=0.5,trueerr=1.0,tmin=None,tmax=None):
 #//main test program
 def main(argv):
 
-    print('in')
     ptmcmc.Init()
 
     #//prep command-line options
@@ -466,7 +465,10 @@ def main(argv):
     opt.add('lctype','Light curve model version. Options are 2 or 3. (Default 3)','3')
     opt.add('pins','json formatted string with parname:pinvalue pairs','{}')
 
-    print('added options')
+    #for MCMC
+    opt.add("mcmc_style","Provide mcmc flags as a json string","{}")
+    
+
     #//Create the sampler
     #ptmcmc_sampler mcmc;
     s0=ptmcmc.sampler(opt)
@@ -474,7 +476,9 @@ def main(argv):
     opt.parse(argv)
     
     #Process flags:
-    getpar=lambda name,typ:style.get(name,typ(opt.value(name)))
+    intf=lambda x: int(x)
+    pval=lambda name:opt.value(name)
+    getpar=lambda name,typ:style.get(name,typ(opt.value(name)) if len(opt.value(name))>0 or typ==str else None)
     getboolpar=lambda name:style.get(name,(opt.value(name)!='0'))
     getNpar=lambda name,typ:style.get(name,typ(opt.value(name)) if opt.value(name)!='None' else None)
 
@@ -490,7 +494,12 @@ def main(argv):
     #data
     style={}
     if opt.value('data_style')!='': 
-        style=json.loads(opt.value('data_style'))
+        style=opt.value('data_style')
+        if style.startswith('{'):
+            style=json.loads(style)
+        else:
+            with open(style,'r') as sfile:
+                style=json.load(sfile)
     id=getpar('id',int)
     datadir=getpar('datadir',str)
     massTol=getpar('massTol',float)
@@ -501,21 +510,56 @@ def main(argv):
     trueerr=getpar('trueerr',float)
     datafile=getpar('datafile',str)
     period=getNpar('period',float)
-    print('got data pars: period',period)
+    downfac=getpar('downfac',float)
 
     # HB model style
     style={}
-    if opt.value('hb_style')!='': 
-        style=json.loads(opt.value('hb_style'))
+    print('hb_style',opt.value('hb_style'))
+    if opt.value('hb_style')!='':
+        style=opt.value('hb_style')
+        if style.startswith('{'):
+            style=json.loads(style)
+        else:
+            with open(style,'r') as sfile:
+                style=json.load(sfile)
+    print('processed:',"'"+json.dumps(style)+"'")
     Roche_wt=getpar('Roche_wt',float)
     pindict=getpar('pins',json.loads)
     eMax=getpar('eMax',float)
-    downfac=getpar('downfac',float)
     forceM1gtM2=getboolpar('M1gtM2')
-    rescalefac=getpar('rescalefac',float)
     lferr0=None
     blend=getboolpar('blend')
     lctype=getpar('lctype',int)
+    print('Roche_wt,emax,lctype:',Roche_wt,eMax,lctype)
+
+    #Process mcmc options
+    style=opt.value('mcmc_style')
+    if style.startswith('{'):
+        style=json.loads(style)
+    else:
+        with open(style,'r') as sfile:
+            style=json.load(sfile)
+    mcmc_options=style
+    hb_mcmc_flags=['rescalefac']
+    style={}
+    optlist=[]
+    no_arg_flags=['de_mixing','gauss_temp_scaled','prop_adapt_more','pt_reboot_grad']
+    keys=list(mcmc_options.keys())
+    for key in keys:
+        if key in hb_mcmc_flags:
+            k, v = mcmc_options.popitem()
+            style[k]=v
+    for key in mcmc_options:            
+        arg=mcmc_options[key]
+        if key in no_arg_flags:
+            if arg: optlist.append('--'+key)
+        else:
+            optlist.append('--'+key+'='+str(arg))
+    rescalefac=getpar('rescalefac',float)
+
+    
+    #Pass to ptmcmc
+    opt.parse(optlist)
     
     #Get TIC catalog info:    
     if noTIC:
@@ -551,12 +595,12 @@ def main(argv):
         if rep:print('Mstar=',Mstar)
 
     allowsecs=None
-    if sectors!="":
+    if sectors!='':
         allowsecs=sectors.split(',')
         allowsecs=[int(sec) for sec in allowsecs]
     tmin=None
     tmax=None
-    if tlimits!="":
+    if tlimits!='':
         tlims=tlimits.split(',')
         if len(tlims)<2:tlims.append('')
         if tlims[0].isnumeric():tmin=float(tlims[0])
@@ -568,7 +612,10 @@ def main(argv):
     if datafile=='':
         dfg=read_data_from_sector_files(id,datadir,edgeskip=0.5,allowsecs=allowsecs,trueerr=trueerr,tmin=tmin,tmax=tmax)
     else:
-        filepath=datadir+'/'+datafile
+        if datafile.startswith('/'):
+            filepath=datafile
+        else:
+            filepath=datadir+'/'+datafile
         dfg=read_data_from_file(id,filepath,trueerr=trueerr,tmin=tmin,tmax=tmax)
     if rep:
         print('Trimmed data length is',len(dfg))

@@ -1,0 +1,9 @@
+#These are my parameter option examples and a script which uses them with HB_MCMC2.py on the discoveeere cluster.  These can be adapted for another machine.
+#To use:
+#   -Copy these files to your run directory.
+#   -Adapt submit.py for your system:
+#       -Tweak file/dir locations at the top
+#       -Tweak the submission_template for your setup
+#       -etc
+#then run, eg:
+python3 submit.py 110602878 std hb3 pt40 0 H1x20

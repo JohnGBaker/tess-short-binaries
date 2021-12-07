@@ -1,0 +1,18 @@
+{
+    "H1x20":{
+	"CONSTRAINT":"hasw",
+	"NODESIZE":28,
+	"NPROCS":20,
+	"TIME":12,
+	"NODES":1
+    },
+    "H2x50":{
+	"CONSTRAINT":"hasw",
+	"NODESIZE":28,
+	"NPROCS":50,
+	"TIME":12,
+	"NODES":2
+    }
+}
+
+	
