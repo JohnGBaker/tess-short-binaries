@@ -467,6 +467,7 @@ def main(argv):
 
     #for MCMC
     opt.add("mcmc_style","Provide mcmc flags as a json string","{}")
+    opt.add("savefig","Location to save file in plotting mode (Default: interactive display).","")
     
 
     #//Create the sampler
@@ -490,7 +491,8 @@ def main(argv):
     do_plot = opt.value('plotSamples')!="" or int(opt.value('nPlot'))==0    
     ncurves=int(opt.value('nPlot'))
     sampfiles=opt.value('plotSamples')
-
+    savefig=opt.value('savefig')
+    
     #data
     style={}
     if opt.value('data_style')!='': 
@@ -643,15 +645,37 @@ def main(argv):
                     sampfiles=sampfiles[1:-1].split()
             else:
                 sampfiles=[sampfiles]
+            nmaxs=[None for x in sampfiles]
+            for i in range(len(sampfiles)):
+                if ':' in sampfiles[i]:
+                    sampfiles[i],nmaxs[i]=sampfiles[i].split(':')
+                    if i>0 and len(sampfiles[i])==0:sampfiles[i]=sampfiles[i-1]
+                    if len(nmaxs[i])==0:nmaxs[i]=None
+            print('samples files:',sampfiles)
+            print('sample nmaxs:',nmaxs)
             modelsets=[]
-            for sfile in sampfiles:
+            for i in range(len(sampfiles)):
+                sfile=sampfiles[i]
+                n=nmaxs[i]
                 print('Processing',sfile)
-                chain=ptmcmc_analysis.chainData(sfile)
-                n=min(1000000,chain.getSteps()/chain.dSdN)
-                samples=chain.get_samples(ncurves,n)
-                print("samples:")
-                for sample in samples:print(sample)
-                cnames=chain.names[chain.names.index('post')+1:]
+                chain=ptmcmc_analysis.chainData(sfile,useLike=True)
+                if n is None or int(n)>chain.getSteps(): 
+                    n=chain.getSteps()
+                elif '%' in n:
+                    n=int(max(100,float(n[:-1]))/100*chain.getSteps())
+                else: n=int(n)
+                nmaxs[i]=str(n)
+                rows,samples=chain.get_samples(ncurves,nmax=n,good_length=n//10,return_rows=True)
+                print('sample_rows:',rows)
+                colnames=chain.names
+                for att in ['samp','post','like']:
+                    if att in colnames:
+                        print('mean',att,np.mean(chain.data[rows][:,colnames.index(att)]))
+                print('mean pars:',np.mean(samples,axis=0))
+                #print("samples:")
+                #for sample in samples:print(sample)
+                #cnames=chain.names[chain.names.index('post')+1:]
+                cnames=chain.names[chain.ipar0:]
                 idx=[cnames.index(name) for name in like.sp.live_names()]
                 print(idx,cnames,like.sp.live_names())
                 psamples=[like.sp.get_pars([pars[idx[i]] for i in range(len(idx))]) for pars in samples]
@@ -668,7 +692,7 @@ def main(argv):
         plt.errorbar(t,data,yerr=like.ferrs,ls='None',label='data')
         colors=['r','b','g','y','m','c','k']
         for i in range(len(modelsets)):
-            label=sampfiles[i]
+            label=sampfiles[i]+':'+nmaxs[i]
             col=colors[i]
             for model in modelsets[i]:
                 plt.plot(ts,model,col,alpha=0.2,label=label)
@@ -678,7 +702,10 @@ def main(argv):
         
         plt.plot(rawftimes,like.data['flux'],'k.',ls='None',markersize=0.5,label='raw data')
         plt.legend()
-        plt.show()
+        if len(savefig)>0:
+            plt.savefig(savefig)
+        else:
+            plt.show()
         return
         
     if seed<0:seed=np.random.random();
