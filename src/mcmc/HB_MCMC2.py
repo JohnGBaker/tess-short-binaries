@@ -761,6 +761,8 @@ def main(argv):
             fig, axs = plt.subplots(1, 1)
             ax=axs
         plt.subplots_adjust(bottom=0.25)
+        lims0=None
+        lims1=None
         ax.errorbar(t,data,yerr=like.ferrs,ls='None',label='data')
         if do_residual:rax.errorbar(t,data*0,yerr=like.ferrs,ls='None')
         colors=['r','b','g','y','m','c','k']
@@ -769,14 +771,22 @@ def main(argv):
             col=colors[i]
             for model in modelsets[i]:
                 ax.plot(ts,model,col,alpha=0.2,label=label)
+                lims0=autoscale(model,lims0)                
                 label=None
             if do_residual:
                 for resid in residsets[i]:
                     rax.plot(t,resid,col,ls='None',marker='.',alpha=0.2,label=label)
+                    lims1=autoscale(resid,lims1)                
+
         rawftimes=like.data['time']%(like.fperiod)+int(like.data['time'][0]/like.fperiod)*like.fperiod
         #-0*like.data['time'][0]%(like.fperiod)+like.ftimes[0]
         
         ax.plot(rawftimes,like.data['flux'],'k.',ls='None',markersize=0.5,label='raw data')
+        lims0=autoscale(like.data['flux'],lims0)
+
+        ax.set_ylim(lims0)
+        rax.set_ylim(lims1)
+
         leg=plt.figlegend(loc='upper center',fontsize='small',bbox_to_anchor=(0.5, 0.20))
         #leg=ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.05),fancybox=True, shadow=True)
         for lh in leg.legendHandles: 
@@ -813,6 +823,19 @@ def main(argv):
     s.initialize();
     print('initialization done')
     s.run(outname,0);
+
+def autoscale(y,lims=None,tol=0.0025,expand=0.10):
+    #Cut up to tol fraction of the extreme data before autoscaling
+    ysort=np.sort(y)
+    icut=int(tol*len(y))
+    ymin,ymax=ysort[icut],ysort[-(1+icut)]
+    dy=(ymax-ymin)*expand
+    ymin=ymin-dy
+    ymax=ymax+dy
+    if lims is not None:
+        ymin=min(lims[0],ymin)
+        ymax=max(lims[1],ymax)
+    return [ymin,ymax]
 
 if __name__ == "__main__":
     import sys
