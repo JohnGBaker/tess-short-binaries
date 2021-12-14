@@ -6,6 +6,13 @@
 	"TIME":12,
 	"NODES":1
     },
+    "H1x25":{
+	"CONSTRAINT":"hasw",
+	"NODESIZE":28,
+	"NPROCS":25,
+	"TIME":12,
+	"NODES":1
+    },
     "H2x50":{
 	"CONSTRAINT":"hasw",
 	"NODESIZE":28,

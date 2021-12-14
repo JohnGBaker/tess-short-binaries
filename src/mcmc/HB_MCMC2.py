@@ -132,7 +132,7 @@ def adjust_sectors(data):
 
 class HB_likelihood(ptmcmc.likelihood):
     
-    def __init__(self,id,data,period=None,lferr0=None,Mstar=None,massTol=0,lensMax=0,eMax=None,maxperiod=14,fixperiod=None,downfac=1.0,constraint_weight=10000,outname="",rep=False,forceM1gtM2=False,rescalefac=1.0,allow_blend=False,viz=False,lctype=3,pins={}):
+    def __init__(self,id,data,period=None,lferr0=None,Mstar=None,massTol=0,lensMax=0,eMax=None,maxperiod=14,fixperiod=None,downfac=1.0,constraint_weight=10000,outname="",rep=False,forceM1gtM2=False,rescalefac=1.0,viz=False,lctype=3,pins={},prior_dict={},min_per_bin=0):
         self.bestL=None
         self.forceM1gtM2=forceM1gtM2
         self.lctype=lctype
@@ -159,7 +159,7 @@ class HB_likelihood(ptmcmc.likelihood):
                 #the Lomb-Scargle analysis. Otherwise a harmonic is likely to
                 #dominate. We also find the standard 5 samples per peak to be
                 #insufficient.
-                frequency, power = LombScargle(data['time'].values,data['flux'].values,nterms=5).autopower(minimum_frequency=1/maximum_period,maximum_frequency=1/minimum_period,samples_per_peak=50)
+                frequency, power = LombScargle(data['time'].values,data['flux'].values,nterms=10).autopower(minimum_frequency=1/maximum_period,maximum_frequency=1/minimum_period,samples_per_peak=50)
                 #print('LombScargle samples:',len(power))
                 #ilfcut=int(len(power)/20)+1
                 ilfcut=int(len(power))
@@ -193,10 +193,22 @@ class HB_likelihood(ptmcmc.likelihood):
             else:ffold=fperiod*doubler
             self.fperiod=fperiod
             
-            cycles=len(data['time'].values)/48.0/(fperiod/doubler)
-            if self.rep:
+            times=data['time'].values
+            ndataraw=len(times)
+            dts=np.diff(times)
+            dt=np.percentile(dts,90)
+            obs_time=sum(dts[dts<dt*1.5])
+            if rep: print('typical dt=',dt,'observation time',obs_time)
+            obs_cycles=obs_time/self.fperiod
+            cycles=(times[-1]-times[0])/self.fperiod
+            n_per=cycles*downfac
+            while n_per<min_per_bin and n_per<ndataraw/2:
+                downfac*=2
+                n_per=cycles*downfac
+            if rep: 
                 print('Folding period',ffold)
                 print('Data has',cycles,'cycles')
+                print('Estimated n per downsampled bin:',n_per,'>',min_per_bin)
             self.fphases,self.ffluxes,self.ferrs=fold_lc(data['time'].values,data['flux'].values,data['err'].values,ffold,downfac=downfac,rep=rep)
             self.ftimes=self.fphases*ffold+int(data['time'].values[0]/ffold)*ffold
             if self.rep:
@@ -235,7 +247,7 @@ class HB_likelihood(ptmcmc.likelihood):
         if 'logTanom' in sp.live_names(): sp.pin('logTanom',0)
 
         #sp.reset_range('log(F+50)',[logFmean-dlogF,logFmean+dlogF])
-        if not allow_blend: sp.pin('blend_frac',-3)
+        #if not allow_blend: sp.pin('blend_frac',-3)
             
         if(Mstar is not None):
             if massTol==0:
@@ -295,9 +307,25 @@ class HB_likelihood(ptmcmc.likelihood):
             if pname in names:
                 types[names.index(pname)]='gaussian'
                 sp.reset_range(pname,[float('-inf'),float('inf')])
+        if prior_dict is not None:
+            for par in prior_dict:
+                if par in names:
+                    ipar=names.index(par)
+                    pardict=prior_dict[par]
+                    if not isinstance(pardict,dict):raise ValueError('While processing user prior data for parameter "'+par+'". Expected value associated with this par to be a dict, but got '+str(pardict))
+                    if 'center' in pardict:
+                        centers[ipar]=pardict['center']
+                    if 'scale' in pardict:
+                        scales[ipar]=pardict['scale']
+                    if 'type' in pardict:
+                        types[ipar]=pardict['type']
+                        
         #If ln_noise_scale fitting is included, we reduce the prior width if we have already downsampled the data
         if 'ln_noise_resc' in names:
+            pname='ln_noise_resc'
+            print('Rescaling noise fitting prior scale[ln_noise_rescale] =',scales[names.index(pname)],'by the folding factor.')
             scales[names.index(pname)] /= len(data['time'].values)/len(self.ftimes)
+            
         
         #some rescaling for better Gaussian proposals
         rescales=[rescalefac]*npar
@@ -389,7 +417,13 @@ def read_data_from_sector_files(id,basepath,edgeskip=0.5,allowsecs=None,trueerr=
     print("Found in sectors",found_in_sectors)
     return df
 
-def read_data_from_file(id,path,edgeskip=0.5,trueerr=1.0,tmin=None,tmax=None):
+def read_data_from_file(id,path,edgeskip=0.5,trueerr=1.0,tmin=None,tmax=None,weight_err_dt=True):
+    #trueerr is our estimate of the 1-sigma error on the data at flux=1, 
+    #  otherwise err ~ sqrt(flux)
+    #This routine intended for data that are normalized to near-unity flux
+    #If weight_err_dt, then trueerr applies if the local cadence is 
+    #  30min (1/48 day) otherwise the unit flux err is trueerr/sqrt(dt). 
+    #  At longer gaps dt is assumed 1/48. 
     print('Reading data from file:',path)
     data=np.genfromtxt(path,skip_header=1)
     #assumed format t flux other_flux flag
@@ -398,25 +432,32 @@ def read_data_from_file(id,path,edgeskip=0.5,trueerr=1.0,tmin=None,tmax=None):
     if tmax is not None: data=data[data[:,0]<=tmax]
     flux = data[:,1] 
     time = data[:,0]
-    fluxerr = np.sqrt(flux)*trueerr
-    dt=time[1]-time[0]
-    iedgeskip=int(edgeskip/dt)
-    print('iedgeskip',iedgeskip)
-    if(iedgeskip>0):#process edge skips
-        keeps=np.array([True]*len(time))
-        keeps[0:iedgeskip]=False
-        keeps[-iedgeskip:]=False
+    cadfac=np.diff(time,prepend=2*time[0]-time[1])*48
+    fluxerr = np.sqrt(flux/np.minimum(1,cadfac))*trueerr
+    #dt=time[1]-time[0]    
+    #iedgeskip=int(edgeskip/dt)
+    #print('iedgeskip',iedgeskip)
+    if(edgeskip>0):#process edge skips
+        #keeps=np.array([True]*len(time))
+        #keeps[0:iedgeskip]=False
+        #keeps[-iedgeskip:]=False
+        keeps = np.logical_and( time-time[0]>edgeskip, time[-1]-time>edgeskip )
         for i in range(1,len(time)):
             if keeps[i] and time[i]-time[i-1]>0.5: #gap >1/2 day
                 print('cut detected at t =',time[i])
                 print(time[i-1],time[i],time[i]-time[i-1])
-                keeps[i-iedgeskip:i]=False
-                print('skipping from',time[i-iedgeskip],'to',time[i+iedgeskip])
-                keeps[i:i+iedgeskip]=False
+                #keeps[i-iedgeskip:i]=False
+                #keeps[i:i+iedgeskip]=False
+                #print('skipping from',time[i-iedgeskip],'to',time[i+iedgeskip])
+                keeps=np.logical_and(keeps,
+                                     np.logical_or(
+                                         time<time[i-1]-edgeskip,
+                                         time>time[i]+edgeskip    ) )
+                print('skipping from',time[i-1]-edgeskip,'to',time[i]+edgeskip)
         flux=flux[keeps]
         time=time[keeps]
         fluxerr=fluxerr[keeps]
-        sector=0
+    sector=0
     df=pd.DataFrame([[sector,time[i],flux[i],fluxerr[i]] for i in range(len(time))],columns=['sector','time','flux','err'])
     return df
 
@@ -461,14 +502,15 @@ def main(argv):
     opt.add("trueerr","scalefactor of the error following JS's code. (def=1)","1")
     opt.add("M1gtM2","Set to 1 to force M1>M2. (def=0)","0")
     opt.add('rescalefac','Rescale factor for gaussian proposals. Default=1','1')
-    opt.add('blend','Set to 1 to vary the blending flux','0')
+    #opt.add('blend','Set to 1 to vary the blending flux','0')
     opt.add('lctype','Light curve model version. Options are 2 or 3. (Default 3)','3')
     opt.add('pins','json formatted string with parname:pinvalue pairs','{}')
 
     #for MCMC
     opt.add("mcmc_style","Provide mcmc flags as a json string","{}")
     opt.add("savefig","Location to save file in plotting mode (Default: interactive display).","")
-    
+    opt.add('min_per_bin','Minimum mean number of samples per bin after folding and downsampling.(Default 0)','0')
+    opt.add('edgeskip','Size of region to exclude from data near data gaps in days. (Default=0.5)','0.5')
 
     #//Create the sampler
     #ptmcmc_sampler mcmc;
@@ -482,6 +524,7 @@ def main(argv):
     getpar=lambda name,typ:style.get(name,typ(opt.value(name)) if len(opt.value(name))>0 or typ==str else None)
     getboolpar=lambda name:style.get(name,(opt.value(name)!='0'))
     getNpar=lambda name,typ:style.get(name,typ(opt.value(name)) if opt.value(name)!='None' else None)
+
 
     #basic
     outname=opt.value('outname')
@@ -512,8 +555,13 @@ def main(argv):
     trueerr=getpar('trueerr',float)
     datafile=getpar('datafile',str)
     period=getNpar('period',float)
+    if period is None and opt.value('period') != 'None':period=float(opt.value('period'))
     downfac=getpar('downfac',float)
-
+    min_per_bin=getpar('min_per_bin',float)
+    if min_per_bin <=0 and opt.value('min_per_bin')!='0':min_per_bin=float(opt.value('min_per_bin'))
+    print('min_per_bin',min_per_bin)
+    edgeskip=getpar('edgeskip',float)
+    if edgeskip ==0.5 and opt.value('edgeskip')!='0.5':edgeskip=float(opt.value('edgeskip'))
     # HB model style
     style={}
     print('hb_style',opt.value('hb_style'))
@@ -530,8 +578,9 @@ def main(argv):
     eMax=getpar('eMax',float)
     forceM1gtM2=getboolpar('M1gtM2')
     lferr0=None
-    blend=getboolpar('blend')
+    #blend=getboolpar('blend')
     lctype=getpar('lctype',int)
+    prior_dict=style.get('prior',{})
     print('Roche_wt,emax,lctype:',Roche_wt,eMax,lctype)
 
     #Process mcmc options
@@ -549,8 +598,8 @@ def main(argv):
     keys=list(mcmc_options.keys())
     for key in keys:
         if key in hb_mcmc_flags:
-            k, v = mcmc_options.popitem()
-            style[k]=v
+            style[key]= mcmc_options[key]
+            del mcmc_options[key]
     for key in mcmc_options:            
         arg=mcmc_options[key]
         if key in no_arg_flags:
@@ -558,6 +607,7 @@ def main(argv):
         else:
             optlist.append('--'+key+'='+str(arg))
     rescalefac=getpar('rescalefac',float)
+    print('rescalefac=',rescalefac)
 
     
     #Pass to ptmcmc
@@ -618,7 +668,7 @@ def main(argv):
             filepath=datafile
         else:
             filepath=datadir+'/'+datafile
-        dfg=read_data_from_file(id,filepath,trueerr=trueerr,tmin=tmin,tmax=tmax)
+        dfg=read_data_from_file(id,filepath,edgeskip=edgeskip,trueerr=trueerr,tmin=tmin,tmax=tmax)
     if rep:
         print('Trimmed data length is',len(dfg))
         dfg[['time','flux','err']].to_csv(outname+'_trimmed.dat')
@@ -630,8 +680,10 @@ def main(argv):
         fixperiod=period
 
     
-    like=HB_likelihood(id,dfg,period,lferr0,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalefac=rescalefac,allow_blend=blend,viz=do_plot,lctype=lctype,pins=pindict)
+    like=HB_likelihood(id,dfg,period,lferr0,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalefac=rescalefac,viz=do_plot,lctype=lctype,pins=pindict,prior_dict=prior_dict,min_per_bin=min_per_bin)
 
+    do_residual=True
+    resid_rescaled=False
     if(do_plot):
         #Plot samples instead of running chains
         t=like.ftimes
@@ -654,15 +706,16 @@ def main(argv):
             print('samples files:',sampfiles)
             print('sample nmaxs:',nmaxs)
             modelsets=[]
+            residsets=[]
             for i in range(len(sampfiles)):
                 sfile=sampfiles[i]
                 n=nmaxs[i]
                 print('Processing',sfile)
                 chain=ptmcmc_analysis.chainData(sfile,useLike=True)
-                if n is None or int(n)>chain.getSteps(): 
+                if n is None or not '%' in n and int(n)>chain.getSteps(): 
                     n=chain.getSteps()
                 elif '%' in n:
-                    n=int(max(100,float(n[:-1]))/100*chain.getSteps())
+                    n=int(min(100,float(n[:-1]))/100*chain.getSteps())
                 else: n=int(n)
                 nmaxs[i]=str(n)
                 rows,samples=chain.get_samples(ncurves,nmax=n,good_length=n//10,return_rows=True)
@@ -672,6 +725,7 @@ def main(argv):
                     if att in colnames:
                         print('mean',att,np.mean(chain.data[rows][:,colnames.index(att)]))
                 print('mean pars:',np.mean(samples,axis=0))
+                print('std pars:',np.std(samples,axis=0))
                 #print("samples:")
                 #for sample in samples:print(sample)
                 #cnames=chain.names[chain.names.index('post')+1:]
@@ -685,23 +739,56 @@ def main(argv):
                     lightcurve=pyHB.lightcurve3
                 models=[lightcurve(ts,p[:-1]) for p in psamples]
                 modelsets.append(models)
-                roches=[pyHB.test_roche_lobe(p,verbose=True) for p in psamples]
+                roches=[pyHB.test_roche_lobe(p,verbose=True) for p in psamples[-1:] ]
                 print('roche fracs:',roches)
+                if do_residual:
+                    resc=[1]*len(psamples)
+                    if 'ln_noise_resc' in cnames:
+                        resid_rescaled=True
+                        iresc=cnames.index('ln_noise_resc')
+                        resc=np.exp([p[iresc] for p in psamples])
+                    #resids=[(data-lightcurve(t,p[:-1])) for p in psamples]
+                    resids=[(data-lightcurve(t,psamples[j][:-1]))/resc[j] for j in range(len(psamples))]
+                    residsets.append(resids)
         else: modelsets =[]
         import matplotlib.pyplot as plt
-        plt.errorbar(t,data,yerr=like.ferrs,ls='None',label='data')
+        if do_residual:
+            fig, axs = plt.subplots(2, 1, figsize=[6.4, 6.4],sharex=True)
+            fig.subplots_adjust(hspace=0)
+            ax=axs[0]
+            rax=axs[1]
+        else:
+            fig, axs = plt.subplots(1, 1)
+            ax=axs
+        plt.subplots_adjust(bottom=0.25)
+        ax.errorbar(t,data,yerr=like.ferrs,ls='None',label='data')
+        if do_residual:rax.errorbar(t,data*0,yerr=like.ferrs,ls='None')
         colors=['r','b','g','y','m','c','k']
         for i in range(len(modelsets)):
             label=sampfiles[i]+':'+nmaxs[i]
             col=colors[i]
             for model in modelsets[i]:
-                plt.plot(ts,model,col,alpha=0.2,label=label)
+                ax.plot(ts,model,col,alpha=0.2,label=label)
                 label=None
+            if do_residual:
+                for resid in residsets[i]:
+                    rax.plot(t,resid,col,ls='None',marker='.',alpha=0.2,label=label)
         rawftimes=like.data['time']%(like.fperiod)+int(like.data['time'][0]/like.fperiod)*like.fperiod
         #-0*like.data['time'][0]%(like.fperiod)+like.ftimes[0]
         
-        plt.plot(rawftimes,like.data['flux'],'k.',ls='None',markersize=0.5,label='raw data')
-        plt.legend()
+        ax.plot(rawftimes,like.data['flux'],'k.',ls='None',markersize=0.5,label='raw data')
+        leg=plt.figlegend(loc='upper center',fontsize='small',bbox_to_anchor=(0.5, 0.20))
+        #leg=ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.05),fancybox=True, shadow=True)
+        for lh in leg.legendHandles: 
+            lh.set_alpha(1)
+        #Title
+        title=str(id)
+        if do_residual:
+            title+=' with residual'
+            if resid_rescaled:
+                title+=' (noise model scaled)'
+        ax.set_title(title)
+        #plt.tight_layout()
         if len(savefig)>0:
             plt.savefig(savefig)
         else:

@@ -18,7 +18,7 @@ submission_template='''#!/bin/bash
 #SBATCH --job-name=LABEL
 #SBATCH --nodes=NODES --ntasks=NPROCS
 #SBATCH --constraint=CONSTRAINT
-#SBATCH --time=TIME:00
+#SBATCH --time=TIME:00:00
 #SBATCH --account=s0982
 
 source /etc/profile.d/modules.sh
@@ -43,7 +43,7 @@ ln -s $ptmcmc .
 contflag=""
 x=0
 if ls -1rtd *-cp>/dev/null 2>&1; then  
-    contflag="-restart_dir=`ls -1rtd *-cp|tail -n 1`";
+    contflag="--restart_dir=`ls -1rtd *-cp|tail -n 1`";
     x=`ls -1rtd ${label}.out.X?|tail -n 1`
     #echo "x=$x"
     x="${x:$((${#x}-1)):1}"

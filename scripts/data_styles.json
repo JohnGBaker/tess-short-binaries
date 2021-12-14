@@ -1,9 +1,28 @@
 {
     "std":{
+	"comment":"For code version before 14 Dec 2021",
 	"id":"_TIC_IC_", 
 	"datafile": "_DATAFILEPATH_", 
 	"period":null, 
 	"downfac":0.2, 
 	"trueerr":0.003
+    },
+    "M5":{
+	"comment":"For code version before 14 Dec 2021",
+	"id":"_TIC_IC_", 
+	"datafile": "_DATAFILEPATH_", 
+	"period":null, 
+	"downfac":0.2, 
+	"trueerr":0.003,
+	"min_per_bin":5
+    },
+    "std2":{
+	"comment":"For code version on after 14 Dec 2021",
+	"id":"_TIC_IC_", 
+	"datafile": "_DATAFILEPATH_", 
+	"period":null, 
+	"downfac":0.2, 
+	"trueerr":0.003,
+	"min_per_bin":5
     }
 } 

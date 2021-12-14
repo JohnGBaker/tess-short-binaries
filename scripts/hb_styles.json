@@ -11,6 +11,17 @@
 	"M1gtM2":true, 
 	"Roche_wt":0.0
     },
+    "hb3loN":{
+	"lctype":3, 
+	"eMax":0.99, 
+	"M1gtM2":true,
+	"prior":{
+	    "ln_noise_resc":{
+		"center":0.02
+	    }
+	},
+	"Roche_wt":0.0
+    },
     "hb3R":{
 	"lctype":3, 
 	"eMax":0.99, 

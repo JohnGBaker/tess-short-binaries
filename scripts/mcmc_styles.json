@@ -28,5 +28,36 @@
 	"chain_ess_limit":0, 
 	"chain_ess_stop":2000, 
 	"rescalefac":10
+    },
+    "pt50B":{
+	"save_every":200, 
+	"nskip":200, 
+	"nsteps":50000000, 
+	"prop_adapt_rate":0.001, 
+	"prop_adapt_more":true, 
+	"gauss_temp_scaled":true,
+	"de_unlikely_alpha":0.01, 
+	"gauss_step_fac":4.0, 
+	"pt":50, 
+	"pt_evolve_rate":0.01, 
+	"chain_ess_limit":0, 
+	"chain_ess_stop":2000, 
+	"rescalefac":200
+    },
+    "pt50C":{
+	"save_every":200, 
+	"nskip":200, 
+	"nsteps":50000000, 
+	"prop_adapt_rate":0.001, 
+	"prop_adapt_more":true, 
+	"gauss_temp_scaled":true,
+	"de_unlikely_alpha":0.01, 
+	"gauss_step_fac":5.0, 
+	"pt":50, 
+	"pt_evolve_rate":0.01, 
+	"chain_ess_limit":0, 
+	"chain_ess_stop":2000, 
+	"rescalefac":1000
     }
+
 }
