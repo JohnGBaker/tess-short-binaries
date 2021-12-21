@@ -16,8 +16,8 @@ import json
 import astroquery
 from astroquery.mast import Catalogs,Observations
 #import re
-
 import sys
+import os
 
 #dirp='../../../TessSLB/src/LightCurveCode'
 #if dirp not in sys.path: sys.path.append(dirp)
@@ -132,7 +132,7 @@ def adjust_sectors(data):
 
 class HB_likelihood(ptmcmc.likelihood):
     
-    def __init__(self,id,data,period=None,lferr0=None,Mstar=None,massTol=0,lensMax=0,eMax=None,maxperiod=14,fixperiod=None,downfac=1.0,constraint_weight=10000,outname="",rep=False,forceM1gtM2=False,rescalefac=1.0,viz=False,lctype=3,pins={},prior_dict={},min_per_bin=0):
+    def __init__(self,id,data,period=None,lferr0=None,Mstar=None,massTol=0,lensMax=0,eMax=None,maxperiod=14,fixperiod=None,downfac=1.0,constraint_weight=10000,outname="",rep=False,forceM1gtM2=False,rescalefac=1.0,viz=False,lctype=3,pins={},prior_dict={},min_per_bin=0,savePfig=""):
         self.bestL=None
         self.forceM1gtM2=forceM1gtM2
         self.lctype=lctype
@@ -181,9 +181,28 @@ class HB_likelihood(ptmcmc.likelihood):
                 if rep and viz:
                     import matplotlib.pyplot as plt
                     #print('Lomb-Scargle period',fperiod)
-                    plt.plot(frequency,power)
-                    plt.plot(frequency[if0:ilfcut],power[if0:ilfcut])
-                    plt.show()
+                    fig, ax1 = plt.subplots()
+                    ax1.plot(frequency,power)
+                    ax1.plot(frequency[if0:ilfcut],power[if0:ilfcut])
+                    if True: #add inset
+                        from mpl_toolkits.axes_grid.inset_locator import (inset_axes, InsetPosition,mark_inset)
+                        #ax2=plt.axes([0,0,1,1])
+                        #inspos=InsetPosition(ax1,[0.4,0.4,0.5,0.5])
+                        #ax2.set_axes_locator(inspos)
+                        #mark_inset(ax1, ax2, loc1=2, loc2=4, fc="none", ec='0.5')
+                        ax2=ax1.inset_axes([0.45,0.45,0.5,0.5])
+                        ax2.plot(frequency,power)
+                        ax2.plot(frequency[if0:ilfcut],power[if0:ilfcut])
+                        ax2.set_xlim(fmax*0.9,fmax*1.1)
+                        ax1.indicate_inset_zoom(ax2)
+                    ax1.set_title(str(id))
+                    ax1.set_xlabel("frequency (1/day)")
+                    
+                    if len(savePfig)>0 and savePfig!="None":
+                        plt.savefig(savePfig)
+                        plt.close()
+                    else:
+                        plt.show()
                 #sys.exit
                     
             doubler=1#set to 2 to fold on  double period
@@ -238,8 +257,13 @@ class HB_likelihood(ptmcmc.likelihood):
 
         #Set pinned params
         for name in pins:
-            if name in sp.live_names():
-                sp.pin(name,pins[name])
+            names=sp.live_names()
+            if name in names:
+                val=pins[name]
+                if val is None:
+                    val=np.mean(sp.live_ranges()[names.index(name)])
+                if rep: print('Pinning param: '+name+'='+str(val))
+                sp.pin(name,val)
             
         #Allow periods within a factor of just over 2% of specified
         sp.reset_range('logP',[np.log10(self.fperiod/1.02),np.log10(self.fperiod*1.02)])
@@ -303,7 +327,7 @@ class HB_likelihood(ptmcmc.likelihood):
         types=['uni']*npar
         types[names.index('inc')]='polar'
         #These shhould be gaussian, if present
-        for pname in ['logTanom', 'mu_1', 'tau_1', 'mu_2', 'tau_2', 'alpha_ref_1', 'alpha_ref_2', 'flux_tune', 'ln_noise_resc']:
+        for pname in ['logTanom', 'mu_1', 'tau_1', 'mu_2', 'tau_2', 'alpha_ref_1', 'alpha_ref_2', 'ln_beam_resc_1', 'ln_beam_resc_2', 'ln_alp_Teff_1', 'ln_alp_Teff_2', 'flux_tune', 'ln_noise_resc']:
             if pname in names:
                 types[names.index(pname)]='gaussian'
                 sp.reset_range(pname,[float('-inf'),float('inf')])
@@ -508,7 +532,8 @@ def main(argv):
 
     #for MCMC
     opt.add("mcmc_style","Provide mcmc flags as a json string","{}")
-    opt.add("savefig","Location to save file in plotting mode (Default: interactive display).","")
+    opt.add("saveLfig","Location to save lightcurve fig file in plotting mode (Default: interactive display).","")
+    opt.add("savePfig","Location to save period fig file in plotting mode (Default: interactive display).","")
     opt.add('min_per_bin','Minimum mean number of samples per bin after folding and downsampling.(Default 0)','0')
     opt.add('edgeskip','Size of region to exclude from data near data gaps in days. (Default=0.5)','0.5')
 
@@ -534,7 +559,8 @@ def main(argv):
     do_plot = opt.value('plotSamples')!="" or int(opt.value('nPlot'))==0    
     ncurves=int(opt.value('nPlot'))
     sampfiles=opt.value('plotSamples')
-    savefig=opt.value('savefig')
+    saveLfig=opt.value('saveLfig')
+    savePfig=opt.value('savePfig')
     
     #data
     style={}
@@ -562,6 +588,8 @@ def main(argv):
     print('min_per_bin',min_per_bin)
     edgeskip=getpar('edgeskip',float)
     if edgeskip ==0.5 and opt.value('edgeskip')!='0.5':edgeskip=float(opt.value('edgeskip'))
+    datastyle=style
+
     # HB model style
     style={}
     print('hb_style',opt.value('hb_style'))
@@ -678,10 +706,18 @@ def main(argv):
     if period is not None and period<0:
         period=-period
         fixperiod=period
-
+        
     
-    like=HB_likelihood(id,dfg,period,lferr0,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalefac=rescalefac,viz=do_plot,lctype=lctype,pins=pindict,prior_dict=prior_dict,min_per_bin=min_per_bin)
+    like=HB_likelihood(id,dfg,period,lferr0,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalefac=rescalefac,viz=do_plot,lctype=lctype,pins=pindict,prior_dict=prior_dict,min_per_bin=min_per_bin,savePfig=savePfig)
 
+    if fixperiod is None:
+        dataPfile="data_style_Pfit.json"
+        if len(savePfig)>0 or not os.path.exists(dataPfile):
+            #Only overwrite when savePfig flag is set
+            datastyle['period']=like.fperiod
+            datastyle['period-note']='period determined automatically by Lomb-Scargle'
+            with open(dataPfile,'w') as dpf:
+                json.dump(datastyle,dpf,indent=4)
     do_residual=True
     resid_rescaled=False
     if(do_plot):
@@ -799,8 +835,9 @@ def main(argv):
                 title+=' (noise model scaled)'
         ax.set_title(title)
         #plt.tight_layout()
-        if len(savefig)>0:
-            plt.savefig(savefig)
+        if len(saveLfig)>0:
+            plt.savefig(saveLfig)
+            plt.close()
         else:
             plt.show()
         return
