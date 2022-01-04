@@ -41,62 +41,74 @@ import re
 
 useM=False
 
-def fold_lc(times,fluxes,errs,Pfold,downfac=1.0,rep=False):
+def fold_lc(times,fluxes,errs,Pfold,downfac=1.0,decimate_level=None,rep=False):
+    #if decimate level is set, that overrides the native downsampling/binning
+    #method using the decimate.py approach with the specified level.
     phases=(np.array(times)/Pfold)%1
     isort=np.argsort(phases)
     phases=phases[isort]
     fluxes=np.array(fluxes)[isort]
     errs=np.array(errs)[isort]
     nold=len(times)
-    print('nold,Pfold,downfac:',nold,Pfold,downfac,times[0],"< t <",times[-1])
+
+    if decimate_level is not None and decimate_level>=0:
+        import decimate
+        print('nold,Pfold,decimate_lev:',nold,Pfold,decimate_level,times[0],"< t <",times[-1])
+        data=np.array([[phases[i],fluxes[i],errs[i]] for i in range(len(phases))])
+        newdata=decimate.decimate(data,lev=decimate_level,npretemper=0,verbose=True)
+        fphases=newdata[:,0]
+        ffluxes=newdata[:,1]
+        ferrs=newdata[:,2]
+    else:      
+        print('nold,Pfold,downfac:',nold,Pfold,downfac,times[0],"< t <",times[-1])
     
-    groupwidth=(times[-1]-times[0])*(1+0.1/nold)/nold/Pfold #frac period bin size
-    groupwidth*=downfac
-    #print('mean errs=',errs.mean())
-    print('groupwidth=',groupwidth, 'mean group size=',groupwidth*nold)
-    fphases=[]
-    ffluxes=[]
-    ferrs=[]
-    i=0
-    j=0
-    while(i<nold):
-        #print(i,j)
-        xs=[]
-        ys=[]
-        es=[]
-        tr=phases[0]+groupwidth*j
-        while(i<nold and phases[i]<tr):
-            #print(i,times[i],tr)
-            xs.append(phases[i])
-            ys.append(fluxes[i])
-            es.append(errs[i])
-            i+=1
-        #print(tr,xs,ys,es)
-        if(len(xs)>0):
-            xs=np.array(xs)
-            ys=np.array(ys)
-            es=np.array(es)
-            ws=1/es**2
-            w=np.sum(ws)
-            x=np.sum(xs*ws)/w
-            y=np.sum(ys*ws)/w
-            v=np.sum((ys-y)**2*ws)/w
-            #print(ys)
-            #print(es)
-            #print(np.sqrt(1/w),np.sqrt(v/len(xs)),np.sqrt(np.sum((ys-y)**2)/len(xs)**2))
-            e=np.sqrt(1/w+v/len(xs))#Not 100% sure this is right
-            #if rep:print(xs,ys,es,'-->',x,y,e,1/w,v)
-            fphases.append(x)
-            ffluxes.append(y)
-            ferrs.append(e)
-        j+=1
-    fphases=np.array(fphases)
-    ffluxes=np.array(ffluxes)
-    ferrs=np.array(ferrs)
+        groupwidth=(times[-1]-times[0])*(1+0.1/nold)/nold/Pfold #frac period bin size
+        groupwidth*=downfac
+        #print('mean errs=',errs.mean())
+        print('groupwidth=',groupwidth, 'mean group size=',groupwidth*nold)
+        fphases=[]
+        ffluxes=[]
+        ferrs=[]
+        i=0
+        j=0
+        while(i<nold):
+            #print(i,j)
+            xs=[]
+            ys=[]
+            es=[]
+            tr=phases[0]+groupwidth*j
+            while(i<nold and phases[i]<tr):
+                #print(i,times[i],tr)
+                xs.append(phases[i])
+                ys.append(fluxes[i])
+                es.append(errs[i])
+                i+=1
+            #print(tr,xs,ys,es)
+            if(len(xs)>0):
+                xs=np.array(xs)
+                ys=np.array(ys)
+                es=np.array(es)
+                ws=1/es**2
+                w=np.sum(ws)
+                x=np.sum(xs*ws)/w
+                y=np.sum(ys*ws)/w
+                v=np.sum((ys-y)**2*ws)/w
+                #print(ys)
+                #print(es)
+                #print(np.sqrt(1/w),np.sqrt(v/len(xs)),np.sqrt(np.sum((ys-y)**2)/len(xs)**2))
+                e=np.sqrt(1/w+v/len(xs))#Not 100% sure this is right
+                #if rep:print(xs,ys,es,'-->',x,y,e,1/w,v)
+                fphases.append(x)
+                ffluxes.append(y)
+                ferrs.append(e)
+            j+=1
+        fphases=np.array(fphases)
+        ffluxes=np.array(ffluxes)
+        ferrs=np.array(ferrs)
     #print('mean err=',ferrs.mean())
     return fphases,ffluxes,ferrs
 
-def weighted_likelihood(ftimes,ffluxes,ferrs,x,sp,constraint_weight=10000,lctype=3):
+def weighted_likelihood(ftimes,ffluxes,ferrs,x,sp,constraint_weight=10000,lctype=3,marginalized_noise_pars=None):
     pars=sp.get_pars(x);
     if sp.out_of_bounds(pars): #Hopefully doesn't happen?
         lr=sp.live_ranges()
@@ -108,6 +120,11 @@ def weighted_likelihood(ftimes,ffluxes,ferrs,x,sp,constraint_weight=10000,lctype
         return -2e18*(1+parwt*0)
     else:
         mlike=pyHB.likelihood(ftimes,ffluxes,ferrs,pars,lctype=lctype)
+
+        if marginalized_noise_pars is not None:
+            alpha,beta0=marginalized_noise_pars
+            mlike=-alpha*np.log(1-mlike/beta0)
+
         if constraint_weight > 0:
             roche_frac=pyHB.test_roche_lobe(pars)
             mlike-=constraint_weight*max([0,roche_frac-1.0])
@@ -132,7 +149,7 @@ def adjust_sectors(data):
 
 class HB_likelihood(ptmcmc.likelihood):
     
-    def __init__(self,id,data,period=None,lferr0=None,Mstar=None,massTol=0,lensMax=0,eMax=None,maxperiod=14,fixperiod=None,downfac=1.0,constraint_weight=10000,outname="",rep=False,forceM1gtM2=False,rescalefac=1.0,viz=False,lctype=3,pins={},prior_dict={},min_per_bin=0,savePfig=""):
+    def __init__(self,id,data,period=None,Mstar=None,massTol=0,lensMax=0,eMax=None,maxperiod=14,fixperiod=None,downfac=1.0,constraint_weight=10000,outname="",rep=False,forceM1gtM2=False,rescalefac=1.0,viz=False,lctype=3,pins={},prior_dict={},min_per_bin=0,savePfig="",marginalize_noise=False,decimate_level=None):
         self.bestL=None
         self.forceM1gtM2=forceM1gtM2
         self.lctype=lctype
@@ -228,7 +245,7 @@ class HB_likelihood(ptmcmc.likelihood):
                 print('Folding period',ffold)
                 print('Data has',cycles,'cycles')
                 print('Estimated n per downsampled bin:',n_per,'>',min_per_bin)
-            self.fphases,self.ffluxes,self.ferrs=fold_lc(data['time'].values,data['flux'].values,data['err'].values,ffold,downfac=downfac,rep=rep)
+            self.fphases,self.ffluxes,self.ferrs=fold_lc(data['time'].values,data['flux'].values,data['err'].values,ffold,downfac=downfac,rep=rep,decimate_level=decimate_level)
             self.ftimes=self.fphases*ffold+int(data['time'].values[0]/ffold)*ffold
             if self.rep:
                 array=np.vstack((self.ftimes,self.ffluxes,self.ferrs)).T
@@ -244,7 +261,6 @@ class HB_likelihood(ptmcmc.likelihood):
         #logFmean=np.log10(ffmean+50)
         if False and self.rep:
             print('ffmean',ffmean)
-            print('logFmean',logFmean)
             print('ftimes',self.ftimes)
             print('ffluxes',self.ffluxes)
 
@@ -288,16 +304,38 @@ class HB_likelihood(ptmcmc.likelihood):
 
         #Expand the mass range for test
         sp.reset_range('logM1',[-1.5,2.5])
+
+        #Prep noise_marginialization
+        self.marginalized_noise_pars=None
+        if marginalize_noise:
+            par='ln_noise_resc'
+            if par in sp.live_names():
+                #note: we assume zero mean on the log noise scaling
+                #otherwise we copy the steps from below to set the scale
+                #FIXME: It would be much better to move this after, but
+                #       then we also need to movev the specification of 
+                #       the ptmcmc space to after that.  Not hard...
+                scale = sp.live_ranges()[sp.live_names().index(par)][1]
+                if prior_dict is not None:
+                    if 'ln_noise_resc' in prior_dict:
+                        pardict=prior_dict[par]
+                        if not isinstance(pardict,dict):raise ValueError('While processing user prior data for parameter "'+par+'". Expected value associated with this par to be a dict, but got '+str(pardict))
+                        if 'scale' in pardict:
+                            scale=pardict['scale']
+                sp.pin('ln_noise_resc',0)
+                sigma0 = scale / (len(data['time'].values)/len(self.ftimes)) #matches how prior is set below
+                alpha0 = 2 + 1/(np.exp(4*sigma0**2)-1)
+                beta0 = np.exp(6*sigma0**2) / ( np.exp(4*sigma0**2) - 1 )
+                alpha = alpha0 + len(self.ftimes)/2
+                self.marginalized_noise_pars=(alpha,beta0)
+                if rep: print('Noise level marginalization activated with sigma0=',sigma0,'-->alpha0,alpha,beta0=',alpha0,alpha,beta0)
+            else: 
+                raise ValueError('No free noise parameter to marginialize.')
         
         ###Compute SNR
         #pars0=[-10,1,10000,0,0,0,0,logFmean,0]
         #logMlens, Mstar, Pdays, e, sini, omgf, T0overP,logFp50,Fblend=pars0
 
-        #if lferr0 is None:
-        #    llike0=pyHB.likelihood(self.ftimes,self.ffluxes,self.ferrs,pars0)
-        #else:
-        #    llike0=pyHB.likelihood_log10ferr0(self.ftimes,self.ffluxes,lferr0,pars0)
-        self.lferr0=lferr0
         #SNR=np.sqrt(-llike0*2)
 
         print('sp:live',sp.live_names())
@@ -347,7 +385,7 @@ class HB_likelihood(ptmcmc.likelihood):
         #If ln_noise_scale fitting is included, we reduce the prior width if we have already downsampled the data
         if 'ln_noise_resc' in names:
             pname='ln_noise_resc'
-            print('Rescaling noise fitting prior scale[ln_noise_rescale] =',scales[names.index(pname)],'by the folding factor.')
+            print('Rescaling noise fitting prior scale[ln_noise_resc] =',scales[names.index(pname)],'by the folding factor.')
             scales[names.index(pname)] /= len(data['time'].values)/len(self.ftimes)
             
         
@@ -369,10 +407,8 @@ class HB_likelihood(ptmcmc.likelihood):
                 done=True
         if not done:
             #print(params)
-            if self.lferr0 is None:
-                result=weighted_likelihood(self.ftimes,self.ffluxes,self.ferrs,params,self.sp,self.constraint_weight,self.lctype)
-            #else:
-                #result=weighted_likelihood_lferr0(self.ftimes,self.ffluxes,self.lferr0,params,self.sp,self.constraint_weight)
+            result=weighted_likelihood(self.ftimes,self.ffluxes,self.ferrs,params,self.sp,self.constraint_weight,self.lctype,marginalized_noise_pars=self.marginalized_noise_pars)
+
         if False:
             global count
             print(count)
@@ -523,19 +559,21 @@ def main(argv):
     opt.add("nPlot","If plotting samples, how many to sample curves to include","20")
     opt.add("downfac","Extra downsampling factor in lightcurve folding.","1")
     opt.add("Roche_wt","Weight factor for Roche-limit constraint (def 10000).","10000")
-    opt.add("trueerr","scalefactor of the error following JS's code. (def=1)","1")
     opt.add("M1gtM2","Set to 1 to force M1>M2. (def=0)","0")
     opt.add('rescalefac','Rescale factor for gaussian proposals. Default=1','1')
     #opt.add('blend','Set to 1 to vary the blending flux','0')
     opt.add('lctype','Light curve model version. Options are 2 or 3. (Default 3)','3')
     opt.add('pins','json formatted string with parname:pinvalue pairs','{}')
+    opt.add('marginalize_noise','Set to 1 to analytically marginalize noise scaling.','0')
 
     #for MCMC
     opt.add("mcmc_style","Provide mcmc flags as a json string","{}")
     opt.add("saveLfig","Location to save lightcurve fig file in plotting mode (Default: interactive display).","")
     opt.add("savePfig","Location to save period fig file in plotting mode (Default: interactive display).","")
     opt.add('min_per_bin','Minimum mean number of samples per bin after folding and downsampling.(Default 0)','0')
+    opt.add('decimate_level','Level (0-15) to apply in decimat.py data decimation algorithm. Larger numbr is more aggressive. Overrides native downsampling. (Default none.)','-1')
     opt.add('edgeskip','Size of region to exclude from data near data gaps in days. (Default=0.5)','0.5')
+    opt.add("trueerr","scalefactor of the error following JS's code. (def=1)","1")
 
     #//Create the sampler
     #ptmcmc_sampler mcmc;
@@ -579,13 +617,14 @@ def main(argv):
     sectors=getpar('sectors',str)
     tlimits=getpar('tlimits',str)
     trueerr=getpar('trueerr',float)
+    decimate_level=getpar('decimate_level',int)
     datafile=getpar('datafile',str)
     period=getNpar('period',float)
     if period is None and opt.value('period') != 'None':period=float(opt.value('period'))
     downfac=getpar('downfac',float)
     min_per_bin=getpar('min_per_bin',float)
     if min_per_bin <=0 and opt.value('min_per_bin')!='0':min_per_bin=float(opt.value('min_per_bin'))
-    print('min_per_bin',min_per_bin)
+    if rep:print('decimate-level',decimate_level)
     edgeskip=getpar('edgeskip',float)
     if edgeskip ==0.5 and opt.value('edgeskip')!='0.5':edgeskip=float(opt.value('edgeskip'))
     datastyle=style
@@ -600,16 +639,17 @@ def main(argv):
         else:
             with open(style,'r') as sfile:
                 style=json.load(sfile)
-    print('processed:',"'"+json.dumps(style)+"'")
+    if rep: print('processed:',"'"+json.dumps(style)+"'")
     Roche_wt=getpar('Roche_wt',float)
     pindict=getpar('pins',json.loads)
     eMax=getpar('eMax',float)
     forceM1gtM2=getboolpar('M1gtM2')
-    lferr0=None
+    marginalize_noise=getboolpar('marginalize_noise')
+
     #blend=getboolpar('blend')
     lctype=getpar('lctype',int)
     prior_dict=style.get('prior',{})
-    print('Roche_wt,emax,lctype:',Roche_wt,eMax,lctype)
+    if rep: print('Roche_wt,emax,lctype:',Roche_wt,eMax,lctype)
 
     #Process mcmc options
     style=opt.value('mcmc_style')
@@ -635,7 +675,7 @@ def main(argv):
         else:
             optlist.append('--'+key+'='+str(arg))
     rescalefac=getpar('rescalefac',float)
-    print('rescalefac=',rescalefac)
+    if rep: print('rescalefac=',rescalefac)
 
     
     #Pass to ptmcmc
@@ -708,7 +748,7 @@ def main(argv):
         fixperiod=period
         
     
-    like=HB_likelihood(id,dfg,period,lferr0,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalefac=rescalefac,viz=do_plot,lctype=lctype,pins=pindict,prior_dict=prior_dict,min_per_bin=min_per_bin,savePfig=savePfig)
+    like=HB_likelihood(id,dfg,period,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalefac=rescalefac,viz=do_plot,lctype=lctype,pins=pindict,prior_dict=prior_dict,min_per_bin=min_per_bin,savePfig=savePfig,marginalize_noise=marginalize_noise,decimate_level=decimate_level)
 
     if fixperiod is None:
         dataPfile="data_style_Pfit.json"
