@@ -53,19 +53,19 @@ def fold_lc(times,fluxes,errs,Pfold,downfac=1.0,decimate_level=None,rep=False):
 
     if decimate_level is not None and decimate_level>=0:
         import decimate
-        print('nold,Pfold,decimate_lev:',nold,Pfold,decimate_level,times[0],"< t <",times[-1])
+        if rep: print('nold,Pfold,decimate_lev:',nold,Pfold,decimate_level,times[0],"< t <",times[-1])
         data=np.array([[phases[i],fluxes[i],errs[i]] for i in range(len(phases))])
         newdata=decimate.decimate(data,lev=decimate_level,npretemper=0,verbose=True)
         fphases=newdata[:,0]
         ffluxes=newdata[:,1]
         ferrs=newdata[:,2]
     else:      
-        print('nold,Pfold,downfac:',nold,Pfold,downfac,times[0],"< t <",times[-1])
+        if rep: print('nold,Pfold,downfac:',nold,Pfold,downfac,times[0],"< t <",times[-1])
     
         groupwidth=(times[-1]-times[0])*(1+0.1/nold)/nold/Pfold #frac period bin size
         groupwidth*=downfac
         #print('mean errs=',errs.mean())
-        print('groupwidth=',groupwidth, 'mean group size=',groupwidth*nold)
+        if rep: print('groupwidth=',groupwidth, 'mean group size=',groupwidth*nold)
         fphases=[]
         ffluxes=[]
         ferrs=[]
@@ -132,24 +132,63 @@ def weighted_likelihood(ftimes,ffluxes,ferrs,x,sp,constraint_weight=10000,lctype
         #print(roche_frac,pars)
         return mlike
 
-def adjust_sectors(data):
+def adjust_sectors(data, verbose=False):
     sector_tag='sector'
     sectors=data[sector_tag].unique()
-    print('sectors',sectors)
+    if verbose: print('sectors',sectors)
     if(len(sectors)>1):
         medians=np.array([np.median(data.flux[data[sector_tag]==sec]) for sec in sectors])
         offsets=medians-medians.mean()
         #print('offsets',offsets)
         for i in range(len(sectors)):
             data.loc[data[sector_tag]==sectors[i],'flux']/=1+offsets[i]/medians.mean()
-        print('Adjusted sector levels:',offsets)
-        print('Adjusted sector factors:',1+offsets/medians.mean())
+        if verbose: 
+            print('Adjusted sector levels:',offsets)
+            print('Adjusted sector factors:',1+offsets/medians.mean())
     return data
 
+#*******************
+# Approx symmetries
+#*******************
+
+def invert_binary_symmetry_transf(s, randoms): 
+    sp=s.getSpace()
+    iinc=sp.requireIndex("inc")
+    parvals=s.get_params()
+    parvals[iinc]=np.pi-parvals[iinc]
+    return ptmcmc.state(s,parvals);
+
+def back_view_symmetry_transf(s, randoms):
+    #This is based on an observed approximate symmetry if we switch to
+    #back side view (omega0->omega0+pi) and also swap the combination
+    #logM+2*log_rad_resc between starts 1 and 2.
+    #We realize the latter by:
+    #logrr1 -> logrr2 + 0.5*(logM2-logM1)
+    #logrr2 -> sim
+    #i.e. preserving M1,M2
+    #
+    #The jacobian is trivial
+    sp=s.getSpace()
+    iom0=sp.requireIndex("omega0")
+    im1=sp.requireIndex("logM1")
+    im2=sp.requireIndex("logM2")
+    irr1=sp.requireIndex("log_rad1_resc")
+    irr2=sp.requireIndex("log_rad2_resc")
+    parvals=s.get_params()
+    parvals[iom0]+=np.pi
+    dm=(parvals[im1]-parvals[im2])/2
+    if parvals[iom0]>np.pi:parvals[iom0]-=2*np.pi
+    newrr1=parvals[irr2]-dm
+    newrr2=parvals[irr1]+dm
+    parvals[irr1]=newrr1
+    parvals[irr2]=newrr2
+    return ptmcmc.state(s,parvals);
+
+#############################################################################
 
 class HB_likelihood(ptmcmc.likelihood):
     
-    def __init__(self,id,data,period=None,Mstar=None,massTol=0,lensMax=0,eMax=None,maxperiod=14,fixperiod=None,downfac=1.0,constraint_weight=10000,outname="",rep=False,forceM1gtM2=False,rescalefac=1.0,viz=False,lctype=3,pins={},prior_dict={},min_per_bin=0,savePfig="",marginalize_noise=False,decimate_level=None):
+    def __init__(self,id,data,period=None,Mstar=None,massTol=0,lensMax=0,eMax=None,maxperiod=14,fixperiod=None,downfac=1.0,constraint_weight=10000,outname="",rep=False,forceM1gtM2=False,rescalesdict={},rescalefac=1.0,viz=False,lctype=3,pins={},prior_dict={},min_per_bin=0,savePfig="",marginalize_noise=False,decimate_level=None,use_syms=False):
         self.bestL=None
         self.forceM1gtM2=forceM1gtM2
         self.lctype=lctype
@@ -176,7 +215,7 @@ class HB_likelihood(ptmcmc.likelihood):
                 #the Lomb-Scargle analysis. Otherwise a harmonic is likely to
                 #dominate. We also find the standard 5 samples per peak to be
                 #insufficient.
-                frequency, power = LombScargle(data['time'].values,data['flux'].values,nterms=10).autopower(minimum_frequency=1/maximum_period,maximum_frequency=1/minimum_period,samples_per_peak=50)
+                frequency, power = LombScargle(data['time'].values,data['flux'].values,nterms=15).autopower(minimum_frequency=1/maximum_period,maximum_frequency=1/minimum_period,samples_per_peak=50)
                 #print('LombScargle samples:',len(power))
                 #ilfcut=int(len(power)/20)+1
                 ilfcut=int(len(power))
@@ -390,10 +429,23 @@ class HB_likelihood(ptmcmc.likelihood):
             
         
         #some rescaling for better Gaussian proposals
-        rescales=[rescalefac]*npar
+        rescales=[1]*npar
+        for name in rescalesdict:
+            if name in names:
+                rescales[names.index(name)]=rescalesdict[name]
+            
         
+        rescales=[val*rescalefac for val in rescales]
+        
+        if use_syms: 
+            #Add information about potential symmetries
+            if rep: print("Applying symmetry transform.")
+            space.addSymmetry(ptmcmc.involution(space,"invert_binary",0,invert_binary_symmetry_transf))
+            space.addSymmetry(ptmcmc.involution(space,"back_view",0,back_view_symmetry_transf))
+
         print("HB_likelihood::setup: space="+space.show())
         self.basic_setup(space, types, centers, scales, rescales);
+
 
     def evaluate_log(self,s):
         params=s.get_params()
@@ -477,17 +529,29 @@ def read_data_from_sector_files(id,basepath,edgeskip=0.5,allowsecs=None,trueerr=
     print("Found in sectors",found_in_sectors)
     return df
 
-def read_data_from_file(id,path,edgeskip=0.5,trueerr=1.0,tmin=None,tmax=None,weight_err_dt=True):
+def read_data_from_file(id,path,edgeskip=0.5,trueerr=1.0,tmin=None,tmax=None,weight_err_dt=True,verbose=False):
     #trueerr is our estimate of the 1-sigma error on the data at flux=1, 
     #  otherwise err ~ sqrt(flux)
     #This routine intended for data that are normalized to near-unity flux
     #If weight_err_dt, then trueerr applies if the local cadence is 
     #  30min (1/48 day) otherwise the unit flux err is trueerr/sqrt(dt). 
     #  At longer gaps dt is assumed 1/48. 
-    print('Reading data from file:',path)
-    data=np.genfromtxt(path,skip_header=1)
-    #assumed format t flux other_flux flag
-    data=data[data[:,3]==0] #clean out the flagged rows
+    if verbose: print('Reading data from file:',path)
+    if path.endswith(".fits"):
+        if verbose: print('This seems to be a FITS file.')
+        from astropy.io import fits
+        f=fits.open(path)
+        time=f[1].data["TIME"]
+        flux=f[1].data["CORR_FLUX"]
+        flux=flux/np.median(flux)
+        if verbose: print('time.shape',time.shape)
+        data=np.column_stack((time,flux,0*flux))  #Maybe there is useful error info??
+        if verbose: print('data.shape',data.shape)
+    else:
+        if verbose: print('Will read as text data.')
+        data=np.genfromtxt(path,skip_header=1)
+        #assumed format t flux other_flux flag
+        data=data[data[:,3]==0] #clean out the flagged rows
     if tmin is not None: data=data[data[:,0]>=tmin]
     if tmax is not None: data=data[data[:,0]<=tmax]
     flux = data[:,1] 
@@ -504,8 +568,9 @@ def read_data_from_file(id,path,edgeskip=0.5,trueerr=1.0,tmin=None,tmax=None,wei
         keeps = np.logical_and( time-time[0]>edgeskip, time[-1]-time>edgeskip )
         for i in range(1,len(time)):
             if keeps[i] and time[i]-time[i-1]>0.5: #gap >1/2 day
-                print('cut detected at t =',time[i])
-                print(time[i-1],time[i],time[i]-time[i-1])
+                if verbose: 
+                    print('cut detected at t =',time[i])
+                    print(time[i-1],time[i],time[i]-time[i-1])
                 #keeps[i-iedgeskip:i]=False
                 #keeps[i:i+iedgeskip]=False
                 #print('skipping from',time[i-iedgeskip],'to',time[i+iedgeskip])
@@ -513,7 +578,7 @@ def read_data_from_file(id,path,edgeskip=0.5,trueerr=1.0,tmin=None,tmax=None,wei
                                      np.logical_or(
                                          time<time[i-1]-edgeskip,
                                          time>time[i]+edgeskip    ) )
-                print('skipping from',time[i-1]-edgeskip,'to',time[i]+edgeskip)
+                if verbose: print('skipping from',time[i-1]-edgeskip,'to',time[i]+edgeskip)
         flux=flux[keeps]
         time=time[keeps]
         fluxerr=fluxerr[keeps]
@@ -549,7 +614,13 @@ def main(argv):
     opt.add("sectors","Only use these sectors (comma-separated)","")
     opt.add("tlimits","Set tmin,tmax time limits, outside which to ignore data. (def=none)","")    
     opt.add("noTIC","Set to 1 to skip any online query about TIC id.","0")
+    opt.add("trueerr","scalefactor of the error following JS's code. (def=1)","1")
+    opt.add('min_per_bin','Minimum mean number of samples per bin after folding and downsampling.(Default 0)','0')
+    opt.add('decimate_level','Level (0-15) to apply in decimat.py data decimation algorithm. Larger numbr is more aggressive. Overrides native downsampling. (Default none.)','-1')
+    opt.add('edgeskip','Size of region to exclude from data near data gaps in days. (Default=0.5)','0.5')
 
+    #//Create the sampler
+    #ptmcmc_sampler mcmc;
     #hb model style flags
     opt.add("hb_style","Provide heartbeat model style flags as a json string","")
     opt.add("datadir","directory where processed sector data files are located",".")
@@ -560,23 +631,20 @@ def main(argv):
     opt.add("downfac","Extra downsampling factor in lightcurve folding.","1")
     opt.add("Roche_wt","Weight factor for Roche-limit constraint (def 10000).","10000")
     opt.add("M1gtM2","Set to 1 to force M1>M2. (def=0)","0")
-    opt.add('rescalefac','Rescale factor for gaussian proposals. Default=1','1')
     #opt.add('blend','Set to 1 to vary the blending flux','0')
     opt.add('lctype','Light curve model version. Options are 2 or 3. (Default 3)','3')
     opt.add('pins','json formatted string with parname:pinvalue pairs','{}')
     opt.add('marginalize_noise','Set to 1 to analytically marginalize noise scaling.','0')
+    opt.add('rescales','Rescaling factors to base proposals, etc., as json formatted string with parname:value pairs','{}')
 
     #for MCMC
     opt.add("mcmc_style","Provide mcmc flags as a json string","{}")
-    opt.add("saveLfig","Location to save lightcurve fig file in plotting mode (Default: interactive display).","")
-    opt.add("savePfig","Location to save period fig file in plotting mode (Default: interactive display).","")
-    opt.add('min_per_bin','Minimum mean number of samples per bin after folding and downsampling.(Default 0)','0')
-    opt.add('decimate_level','Level (0-15) to apply in decimat.py data decimation algorithm. Larger numbr is more aggressive. Overrides native downsampling. (Default none.)','-1')
-    opt.add('edgeskip','Size of region to exclude from data near data gaps in days. (Default=0.5)','0.5')
-    opt.add("trueerr","scalefactor of the error following JS's code. (def=1)","1")
+    opt.add('rescalefac','Rescale factor for gaussian proposals. Default=1','1')
 
-    #//Create the sampler
-    #ptmcmc_sampler mcmc;
+    #Other
+    opt.add("savePfig","Location to save period fig file in plotting mode (Default: interactive display).","")
+    opt.add("saveLfig","Location to save lightcurve fig file in plotting mode (Default: interactive display).","")
+
     s0=ptmcmc.sampler(opt)
     rep=s0.reporting()
     opt.parse(argv)
@@ -631,7 +699,7 @@ def main(argv):
 
     # HB model style
     style={}
-    print('hb_style',opt.value('hb_style'))
+    if rep: print('hb_style',opt.value('hb_style'))
     if opt.value('hb_style')!='':
         style=opt.value('hb_style')
         if style.startswith('{'):
@@ -645,7 +713,8 @@ def main(argv):
     eMax=getpar('eMax',float)
     forceM1gtM2=getboolpar('M1gtM2')
     marginalize_noise=getboolpar('marginalize_noise')
-
+    use_syms=False #May change based on mcmc_options
+    rescalesdict=getpar('rescales',json.loads)
     #blend=getboolpar('blend')
     lctype=getpar('lctype',int)
     prior_dict=style.get('prior',{})
@@ -676,7 +745,10 @@ def main(argv):
             optlist.append('--'+key+'='+str(arg))
     rescalefac=getpar('rescalefac',float)
     if rep: print('rescalefac=',rescalefac)
-
+    if 'sym_prop_frac' in mcmc_options:
+        if rep: print('sym_prop_frac=',mcmc_options['sym_prop_frac'])
+        if mcmc_options['sym_prop_frac']>0:
+            use_syms=True
     
     #Pass to ptmcmc
     opt.parse(optlist)
@@ -725,7 +797,7 @@ def main(argv):
         if len(tlims)<2:tlims.append('')
         if tlims[0].isnumeric():tmin=float(tlims[0])
         if tlims[1].isnumeric():tmax=float(tlims[1])
-        print('Constraining',tmin,'< t <',tmax)
+        if rep: print('Constraining',tmin,'< t <',tmax)
         
     #Prepare the data:
 
@@ -736,7 +808,7 @@ def main(argv):
             filepath=datafile
         else:
             filepath=datadir+'/'+datafile
-        dfg=read_data_from_file(id,filepath,edgeskip=edgeskip,trueerr=trueerr,tmin=tmin,tmax=tmax)
+        dfg=read_data_from_file(id,filepath,edgeskip=edgeskip,trueerr=trueerr,tmin=tmin,tmax=tmax,verbose=rep)
     if rep:
         print('Trimmed data length is',len(dfg))
         dfg[['time','flux','err']].to_csv(outname+'_trimmed.dat')
@@ -748,7 +820,7 @@ def main(argv):
         fixperiod=period
         
     
-    like=HB_likelihood(id,dfg,period,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalefac=rescalefac,viz=do_plot,lctype=lctype,pins=pindict,prior_dict=prior_dict,min_per_bin=min_per_bin,savePfig=savePfig,marginalize_noise=marginalize_noise,decimate_level=decimate_level)
+    like=HB_likelihood(id,dfg,period,Mstar,massTol=massTol,eMax=eMax,maxperiod=20,fixperiod=fixperiod,downfac=downfac,constraint_weight=Roche_wt,outname=outname,rep=rep,forceM1gtM2=forceM1gtM2,rescalesdict=rescalesdict,rescalefac=rescalefac,viz=do_plot,lctype=lctype,pins=pindict,prior_dict=prior_dict,min_per_bin=min_per_bin,savePfig=savePfig,marginalize_noise=marginalize_noise,decimate_level=decimate_level,use_syms=use_syms)
 
     if fixperiod is None:
         dataPfile="data_style_Pfit.json"
