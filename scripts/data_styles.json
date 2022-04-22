@@ -24,5 +24,59 @@
 	"downfac":0.2, 
 	"trueerr":0.003,
 	"min_per_bin":5
+    },
+    "std2M15":{
+	"comment":"For code version on after 14 Dec 2021",
+	"id":"_TIC_IC_", 
+	"datafile": "_DATAFILEPATH_", 
+	"period":null, 
+	"downfac":0.2, 
+	"trueerr":0.003,
+	"min_per_bin":15
+    },
+    "std2M15-e1":{
+	"comment":"Like std2M15, but  with trueerr increase by ~x300",
+	"id":"_TIC_IC_", 
+	"datafile": "_DATAFILEPATH_", 
+	"period":null, 
+	"downfac":0.2, 
+	"trueerr":1.0,
+	"min_per_bin":15
+    },
+    "std2M15-e0.1":{
+	"comment":"Like std2M15, but  with trueerr increase by ~x300",
+	"id":"_TIC_IC_", 
+	"datafile": "_DATAFILEPATH_", 
+	"period":null, 
+	"downfac":0.2, 
+	"trueerr":0.1,
+	"min_per_bin":15
+    },
+    "std2M15-e0.01":{
+	"comment":"Like std2M15, but  with trueerr increase by ~x300",
+	"id":"_TIC_IC_", 
+	"datafile": "_DATAFILEPATH_", 
+	"period":null, 
+	"downfac":0.2, 
+	"trueerr":0.01,
+	"min_per_bin":15
+    },
+    "std2M15-e0.001":{
+	"comment":"Like std2M15, but  with trueerr increase by ~x300",
+	"id":"_TIC_IC_", 
+	"datafile": "_DATAFILEPATH_", 
+	"period":null, 
+	"downfac":0.2, 
+	"trueerr":0.001,
+	"min_per_bin":15
+    },
+    "std3":{
+	"comment":"For code version on after 7 Apr 2022",
+	"id":"_TIC_IC_", 
+	"datafile": "_DATAFILEPATH_", 
+	"period":null, 
+	"downfac":0.2, 
+	"trueerr":0.003,
+	"min_per_bin":5
     }
 } 

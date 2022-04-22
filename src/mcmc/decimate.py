@@ -111,11 +111,11 @@ def reduceDataChunk(segment,target,tol):
        
 def reduceDataPass(data,chunksize,tol,segwid=3):
     ndata=len(data)
-    nchunk=int(ndata/chunksize)+1
+    nchunk=int(ndata/chunksize)+1 #nchunk gives enough to cover the dataset+1
     segsize=int(segwid*chunksize)
-    noff=int((nchunk*chunksize-ndata)/2)
+    noff=int((nchunk*chunksize-ndata)/2) #half the amount of overhang beyond the data 
     #noff=int((nchunk*chunksize-ndata)*np.random.rand())
-    nfirst=chunksize
+    nfirst=chunksize #This gives the location of the first (leftmost) chunk boundary, i.e. the index of the first datapoint in the second chunk.
     if(noff>0):nfirst-=noff
     for i in range(nchunk):
         #print("\n****\ni=",i)
@@ -231,7 +231,7 @@ def decimate(origdata, lev, maxpass=1000, ntemper=20, csscale=1000, npretemper=0
         zeroCounters()
         #with pretempering we begin with a pass of small chunk smoothing to make it less likely to cut small features.
         if(i<npretemper):
-            chunksize=int(csmin*np.exp(np.log(csscale/csmin)*(i/(1.0+npretemper))))
+            chunksize=int(csmin*np.exp(np.log((1+csscale/csmin))*(i/(1.0+npretemper))))
             ieff=0
         else:
             ieff=i-npretemper

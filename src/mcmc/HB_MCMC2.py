@@ -29,6 +29,7 @@ dirp='ptmcmc/python'
 if dirp not in sys.path: sys.path.append(dirp)
 import ptmcmc
 import ptmcmc_analysis
+#import pyHB_Feb as pyHB for runs with code before Apr 7.
 import pyHB
 #import BrowseSLBs
 import copy
@@ -403,8 +404,8 @@ class HB_likelihood(ptmcmc.likelihood):
             scales[i]=(xmax-xmin)/2.0
         types=['uni']*npar
         types[names.index('inc')]='polar'
-        #These shhould be gaussian, if present
-        for pname in ['logTanom', 'mu_1', 'tau_1', 'mu_2', 'tau_2', 'alpha_ref_1', 'alpha_ref_2', 'ln_beam_resc_1', 'ln_beam_resc_2', 'ln_alp_Teff_1', 'ln_alp_Teff_2', 'flux_tune', 'ln_noise_resc']:
+        #These should be gaussian, if present
+        for pname in ['logTanom', 'mu_1', 'tau_1', 'mu_2', 'tau_2', 'alpha_ref_1', 'alpha_ref_2', 'ln_beam_resc_1', 'ln_beam_resc_2', 'ln_alp_Teff_1', 'ln_alp_Teff_2', 'flux_tune', 'ln_noise_resc', 'alp_Teff_1', 'alp_Teff_2','alp_rad1_resc','alp_rad2_resc']:
             if pname in names:
                 types[names.index(pname)]='gaussian'
                 sp.reset_range(pname,[float('-inf'),float('inf')])
